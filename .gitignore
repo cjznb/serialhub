@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test / cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime output
+logs/
+out/
+*.log
+*.jsonl
+
+# Local config (may hold device paths / tokens)
+config.yaml
+config.local.yaml
+config.local.json
+
+# Exports
+exports/
+*.export.txt
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,11 @@
+# serialhub —— 运行时依赖
+pyserial>=3.5
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pyyaml>=6.0
+websockets>=12
+
+# MCP server（官方 SDK，供 `serialhub mcp` / agent 挂载）：
+#   pip install "mcp>=1.9"
+# 1.x 提供 mcp.server.fastmcp.FastMCP，2.x 改名为 mcp.server.mcpserver.MCPServer；
+# serialhub/mcp_compat.py 对两者都兼容，无需按版本改代码。

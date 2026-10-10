@@ -1,0 +1,62 @@
+# serialhub 配置样例（YAML；JSON 亦可，按扩展名自动识别）
+# 用法： python -m serialhub serve --config config.example.yaml
+#       或 serialhub serve --config config.example.yaml
+# 命令行可覆盖关键项：--host / --port / --log-level / --no-autostart
+
+server:
+  host: 127.0.0.1        # Web/HTTP 监听地址（0.0.0.0 对外）
+  port: 8765             # Web/HTTP 监听端口
+  token: null            # 可选 Bearer Token；非空时 HTTP/WS 均需鉴权
+  cors: true             # 是否允许跨域（开发期方便）
+
+# 所有串口的默认参数（可被每个 ports[] 条目逐项覆盖）
+defaults:
+  baud: 115200
+  data_bits: 8           # 5|6|7|8
+  parity: N              # N|E|O|M|S
+  stop_bits: 1           # 1|1.5|2
+  flow: none             # none|rtscts|xonxoff|dsrdtr
+  dtr: true
+  rts: true
+  eol: "\r\n"            # send 默认结尾；亦支持 none|\n|\r|custom
+  encoding: utf-8
+  reconnect_ms: 1000     # 断线重连初始间隔
+  reconnect_max_ms: 10000   # 重连退避上限
+  flush_ms: 50           # 无换行的残行，超过此毫秒数也作为一行吐出
+  buffer_lines: 20000    # 每口环形缓冲保留的最大行数
+  buffer_bytes: 8388608  # 每口环形缓冲保留的最大字节数（8 MiB）
+  autostart: true        # 守护进程启动时是否立即打开
+
+buffer_defaults:         # 未在端口级指定时使用（同 defaults.buffer_*）
+  lines: 20000
+  bytes: 8388608
+
+ports:
+  - name: console
+    device: COM11        # Windows: COMx；Linux: /dev/ttyUSB0；亦支持 loop:// / socket://host:port / rfc2217://...
+    baud: 921600
+    buffer_lines: 50000
+    buffer_bytes: 16777216
+    autostart: true
+    tcp_bridge:          # 可选：把本口暴露为 TCP 桥（也可运行时用 bridge 命令起停）
+      mode: server       # server（监听，客户端写=下发串口）| client（连远端串口服务，透传）
+      port: 4001         # mode=server 时的监听端口
+      # host: 192.168.1.50   # mode=client 时的远端主机
+      # port: 4002
+
+  - name: c6
+    device: COM12
+    baud: 115200
+    autostart: false     # 不随守护进程自动打开，等 agent/web 显式 open
+    eol: "\n"
+
+logging:
+  enabled: false         # 是否把每口收到的数据滚动落盘
+  dir: logs
+  max_mb: 16             # 单文件滚动阈值
+  backups: 3             # 保留的历史文件数
+
+ui:
+  theme: dark            # dark|light
+  timestamp: true        # Web UI 默认是否显示每行时间戳
+  max_render_lines: 5000 # 前端保留的最大渲染行（虚拟滚动窗口）
