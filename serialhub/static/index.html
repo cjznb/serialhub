@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <link rel="icon" href="data:," />
+  <title>serialhub · serial console</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" />
+
+  <!-- xterm.js (ANSI terminal renderer) — vendored locally, CDN as fallback.
+       If the local copy fails we retry from the CDN; only if BOTH fail is
+       window.__xtermCssFailed set (the app then degrades to plain-text). -->
+  <link rel="stylesheet" href="/static/vendor/xterm.min.css"
+        onerror="this.onerror=function(){window.__xtermCssFailed=true;};this.href='https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css';" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- ===================================================== topbar -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">&#8769;</span>
+        <div class="brand-text">
+          <span class="brand-name">serialhub</span>
+          <span class="brand-sub" data-i18n="brandSub">persistent serial hub</span>
+        </div>
+      </div>
+
+      <div class="top-stats" data-i18n-aria="statsAria" aria-label="server stats">
+        <div class="stat"><span class="stat-k" data-i18n="statPorts">ports</span><span class="stat-v" id="statPorts">&ndash;</span></div>
+        <div class="stat"><span class="stat-k" data-i18n="statOpen">open</span><span class="stat-v" id="statOpen">&ndash;</span></div>
+        <div class="stat"><span class="stat-k" data-i18n="statUptime">uptime</span><span class="stat-v" id="statUptime">&ndash;</span></div>
+      </div>
+
+      <div class="top-actions">
+        <div class="conn-pill" id="connPill" data-state="idle" role="status" aria-live="polite">
+          <span class="dot"></span><span id="connText">idle</span>
+        </div>
+        <label class="token-field" data-i18n-title="tokenTitle" title="Bearer token — set if the server requires auth">
+          <span data-i18n="tokenLabel">token</span>
+          <input id="tokenInput" type="password" autocomplete="off" spellcheck="false"
+                 data-i18n-ph="tokenPlaceholder" placeholder="optional" />
+        </label>
+        <div class="lang-switch" role="group" data-i18n-aria="langAria" aria-label="Language">
+          <button type="button" class="lang-btn" data-lang="en">EN</button>
+          <button type="button" class="lang-btn" data-lang="zh">中文</button>
+        </div>
+        <button class="icon-btn" id="themeToggle" data-i18n-title="themeTitle" data-i18n-aria="themeAria"
+                title="Toggle light / dark theme" aria-label="Toggle theme">&#9686;</button>
+      </div>
+    </header>
+
+    <!-- ===================================================== tabs -->
+    <nav class="tabs" id="tabs" role="tablist" data-i18n-aria="tabsAria" aria-label="serial ports"></nav>
+
+    <!-- ===================================================== fallback banner -->
+    <div class="banner" id="banner" hidden>
+      <span class="b-ico">&#9888;</span>
+      <span><strong data-i18n="bannerStrong">xterm.js could not be loaded.</strong><span data-i18n="bannerText"> Running in degraded mode: output is shown as plain text with ANSI color codes stripped. Check your connection, then reload.</span></span>
+    </div>
+
+    <!-- ===================================================== workspace -->
+    <main class="workspace" id="panes"></main>
+
+    <!-- ===================================================== toolbar -->
+    <div class="toolbar" id="toolbar">
+      <div class="tgroup">
+        <button class="btn" id="btnPause" data-i18n-title="pauseTitle" title="Pause / resume live rendering"><span class="bx">&#9208;</span><span data-pause-label>Pause</span></button>
+        <button class="btn on" id="btnAuto" data-i18n-title="autoTitle" title="Toggle autoscroll to newest line"><span class="bx">&#8595;</span><span data-i18n="autoLabel">Autoscroll</span></button>
+        <button class="btn on" id="btnTs" data-i18n-title="tsTitle" title="Toggle per-line timestamp"><span class="bx">&#9201;</span><span data-i18n="tsLabel">Time</span></button>
+        <button class="btn" id="btnClear" data-i18n-title="clearTitle" title="Clear the local view"><span class="bx">&#9003;</span><span data-i18n="clearLabel">Clear</span></button>
+      </div>
+
+      <div class="tsep"></div>
+
+      <label class="field filter-field" data-i18n-title="filterTitle" title="Client-side regex filter over incoming lines">
+        <span class="fl" data-i18n="filterLabel">filter</span>
+        <input id="filterInput" type="text" spellcheck="false"
+               data-i18n-ph="filterPlaceholder" placeholder="regex, e.g. error|warn" />
+      </label>
+
+      <label class="field" data-i18n-title="searchTitle" title="Search retained lines — Enter to run, then jump between hits">
+        <span class="fl" data-i18n="searchLabel">search</span>
+        <input id="searchInput" type="text" spellcheck="false"
+               data-i18n-ph="searchPlaceholder" placeholder="regex" />
+      </label>
+      <div class="tgroup">
+        <button class="btn ghost" id="btnPrev" data-i18n-title="prevTitle" title="Previous hit">&#8593;</button>
+        <span class="search-count" id="searchCount">0/0</span>
+        <button class="btn ghost" id="btnNext" data-i18n-title="nextTitle" title="Next hit">&#8595;</button>
+        <button class="btn ghost" id="btnServerSearch" data-i18n-title="histTitle" title="Search full server history"><span class="bx">&#9906;</span><span data-i18n="histLabel">hist</span></button>
+      </div>
+
+      <div class="tsep"></div>
+
+      <div class="tgroup" data-i18n-title="exportGroupTitle" title="Export this port's buffer (server-side)">
+        <button class="btn" data-export="raw"><span class="bx">&#8595;</span><span data-i18n="exportRaw">raw</span></button>
+        <button class="btn" data-export="noansi"><span class="bx">&#8595;</span><span data-i18n="exportNoansi">noansi</span></button>
+        <button class="btn" data-export="json"><span class="bx">&#8595;</span><span data-i18n="exportJson">json</span></button>
+      </div>
+
+      <div class="search-results" id="searchResults" hidden></div>
+    </div>
+
+    <!-- ===================================================== sendbar -->
+    <div class="sendbar">
+      <select class="select" id="sendPort" data-i18n-title="sendPortTitle" data-i18n-aria="sendPortAria"
+              title="Target port" aria-label="Target port"></select>
+      <input class="send-input" id="sendInput" type="text" spellcheck="false" autocomplete="off"
+             data-i18n-ph="sendPlaceholder"
+             placeholder="type a command to send…  (Enter to send · Up/Down for history)" />
+      <select class="select" id="sendEol" data-i18n-title="eolTitle" data-i18n-aria="eolAria"
+              title="Line ending appended on send" aria-label="Line ending">
+        <option value="crlf" data-i18n="eolCrlf">EOL: CRLF</option>
+        <option value="lf" data-i18n="eolLf">EOL: LF</option>
+        <option value="cr" data-i18n="eolCr">EOL: CR</option>
+        <option value="none" data-i18n="eolNone">EOL: none</option>
+      </select>
+      <button class="btn primary" id="sendBtn" data-i18n="send">Send</button>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- ===================================================== pane template -->
+  <template id="paneTemplate">
+    <section class="pane" role="tabpanel" hidden>
+      <div class="port-head">
+        <div class="port-id">
+          <span class="port-state"><span class="state-dot"></span><span class="state-label" data-i18n="state_closed">closed</span></span>
+          <span class="port-name"></span>
+          <span class="port-meta"></span>
+        </div>
+        <canvas class="spark" width="200" height="34" aria-hidden="true"></canvas>
+        <div class="port-stats">
+          <div class="mini rx"><b class="rate-lines">0</b><i data-i18n="rateLines">lines/s</i></div>
+          <div class="mini tx"><b class="rate-bytes">0</b><i data-i18n="rateBytes">B/s</i></div>
+          <div class="mini"><b class="buf-pct">0%</b><i data-i18n="buffer">buffer</i></div>
+        </div>
+      </div>
+      <div class="term-wrap">
+        <div class="term-host"></div>
+        <pre class="log-fallback" hidden></pre>
+      </div>
+    </section>
+  </template>
+
+  <!-- xterm.js core + fit addon: local vendor primary, CDN fallback.
+       Only if BOTH sources fail do we set the __*Failed flags the app reads
+       to enter degraded (plain-text) mode. app.js awaits these promises. -->
+  <script>
+  (function () {
+    function loadFirst(urls, failFlag) {
+      return new Promise(function (resolve) {
+        var i = 0;
+        (function next() {
+          if (i >= urls.length) { window[failFlag] = true; resolve(false); return; }
+          var s = document.createElement("script");
+          s.src = urls[i++];
+          s.async = false;
+          s.onload = function () { resolve(true); };
+          s.onerror = function () { next(); };
+          document.head.appendChild(s);
+        })();
+      });
+    }
+    window.__xtermReady = loadFirst([
+      "/static/vendor/xterm.min.js",
+      "https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"
+    ], "__xtermFailed");
+    window.__fitReady = loadFirst([
+      "/static/vendor/addon-fit.min.js",
+      "https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"
+    ], "__fitFailed");
+  })();
+  </script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
