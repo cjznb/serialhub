@@ -1,5 +1,8 @@
 # serialhub · 常驻串口中枢
 
+[![CI](https://github.com/cjznb/serialhub/actions/workflows/ci.yml/badge.svg)](https://github.com/cjznb/serialhub/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 把一个或多个串口变成**常驻、可回看、可增量读取、对 AI agent 极友好**的服务：
 
 - **守护进程**持久打开端口，逐行落进每口**环形缓冲**（全局单调 `seq` + epoch 毫秒 `ts_ms`）。
@@ -664,3 +667,6 @@ python tools/mcp_smoke.py --full
 ```
 Copyright (c) 2026 cjznb
 ```
+
+内置/依赖的第三方组件及其许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+（内置的 xterm.js 为 MIT；字体为 SIL OFL，运行时由 CDN 加载、未随仓库分发）。
