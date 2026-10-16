@@ -12,9 +12,10 @@ Every tool returns ``{"ok": true, ...fields}`` or ``{"ok": false, "error": "..."
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 if __package__ in (None, ""):  # executed as a script (e.g. MCP `command: [python, mcp_server.py]`)
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -311,6 +312,58 @@ async def reload() -> dict[str, Any]:
         dict: ``{"ok": true, "added", "removed", "restarted", "updated"}``.
     """
     return await asyncio.to_thread(_client().reload)
+
+
+@mcp.tool(name="set_device", annotations=_MUTATING)
+async def set_device(port: str, device: Optional[str] = None,
+                     match: Optional[Union[str, dict]] = None,
+                     reopen: bool = True) -> dict[str, Any]:
+    """Remap which COM/device a configured port uses at runtime (transient).
+
+    Provide exactly ONE of ``device`` or ``match`` — changing a port's target
+    without editing the config file or restarting the daemon. Nothing is
+    persisted; the mapping lives in memory until the daemon restarts.
+
+    Args:
+        port: Logical port name from the config (e.g. ``console``).
+        device: Fixed device path (e.g. ``COM11``, ``/dev/ttyUSB0``).
+        match: Auto-discovery spec — a JSON object string (e.g.
+            ``'{"vid": "0x1A86", "pid": "0x7523"}'``) or a dict. Keys:
+            description/hwid/device/serial (substring) + vid/pid (int or hex)
+            + index.
+        reopen: Restart the worker now (default true, buffer preserved). When
+            false, only the in-memory mapping changes; it applies on the next
+            open/reconnect.
+
+    Returns:
+        dict: ``{"ok": true, <port dict>}`` (name/device/open/...). On failure
+        ``{"ok": false, "error": "<message>"}``.
+    """
+    spec: Optional[dict] = None
+    if match is not None:
+        if isinstance(match, str):
+            try:
+                spec = json.loads(match)
+            except json.JSONDecodeError:
+                return {"ok": False, "error": f"match must be a JSON object: {match!r}"}
+            if not isinstance(spec, dict):
+                return {"ok": False, "error": f"match must be a JSON object: {match!r}"}
+        else:
+            spec = match
+    return await asyncio.to_thread(_client().set_device, port,
+                                   device=device, match=spec, reopen=reopen)
+
+
+@mcp.tool(name="discover", annotations=_READ_ONLY)
+async def discover() -> dict[str, Any]:
+    """Enumerate system serial devices (indexed, sorted by device name)./
+    枚举系统串口设备（带序号，按设备名排序）。
+
+    Returns:
+        dict: ``{"ok": true, "devices": [{"index", "device", "description",
+        "hwid", "vid", "pid"}...]}``. On failure ``{"ok": false, "error": ...}``.
+    """
+    return await asyncio.to_thread(_client().discover)
 
 
 # --------------------------------------------------------------------------- #

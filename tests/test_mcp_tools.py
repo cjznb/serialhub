@@ -17,6 +17,7 @@ from serialhub.client import Client  # noqa: E402
 EXPECTED_TOOLS = {
     "list_ports", "open", "close", "status", "read", "search", "wait_for",
     "send", "snapshot", "export", "tcp_bridge", "mark", "clear", "reload",
+    "set_device", "discover",
 }
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,10 +39,10 @@ def test_mcp_compat_exports_shim_symbols() -> None:
     assert hasattr(mcp_compat, "ToolAnnotations")
 
 
-def test_mcp_exposes_exactly_the_14_tools() -> None:
+def test_mcp_exposes_exactly_the_expected_tools() -> None:
     names = _tool_names()
     assert names == EXPECTED_TOOLS
-    assert len(names) == 14
+    assert len(names) == 16
 
 
 # ---- client error handling ------------------------------------------------- #

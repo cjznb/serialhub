@@ -29,6 +29,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .i18n import resolve_locale, set_locale, t
+
 if TYPE_CHECKING:  # 仅供类型检查；运行时不需要 hub.py / config.py 存在
     from .config import Config
     from .hub import Hub
@@ -41,12 +43,46 @@ except Exception:  # noqa: BLE001 - 包初始化期间允许缺失
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
+class I18nMiddleware:
+    """Pure-ASGI middleware: pick the request locale from ``Accept-Language``.
+
+    It runs in the same task as the wrapped app (no ``BaseHTTPMiddleware`` task
+    group), so the locale set here is visible to endpoints and to the
+    ``KeyError``/``ValueError``/``RuntimeError`` exception handlers, and it is
+    reset afterwards — requests without the header keep the default locale.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        headers = scope.get("headers") or []
+        accept = next(
+            (value.decode("latin-1") for key, value in headers if key == b"accept-language"),
+            None,
+        )
+        set_locale(resolve_locale(accept_language=accept))
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            set_locale(None)
+
+
 # --------------------------------------------------------------------------- #
 # 请求体模型
 # --------------------------------------------------------------------------- #
 class OpenBody(BaseModel):
     baud: Optional[int] = None
     device: Optional[str] = None
+
+
+class SetDeviceBody(BaseModel):
+    device: Optional[str] = None
+    match: Optional[dict] = None
+    reopen: bool = True
 
 
 class SendBody(BaseModel):
@@ -134,14 +170,14 @@ def create_app(hub: "Hub", config: "Config") -> FastAPI:
         async def _auth_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
             if request.url.path.startswith("/api/") and _http_token(request) != token:
                 return JSONResponse(
-                    status_code=401, content={"ok": False, "error": "unauthorized"}
+                    status_code=401, content={"ok": False, "error": t("server.error.unauthorized")}
                 )
             return await call_next(request)
 
     # ---- 统一异常 → {"ok": false, "error": ...} ----------------------------- #
     @app.exception_handler(KeyError)
     async def _on_key_error(_req: Request, exc: KeyError) -> JSONResponse:
-        return JSONResponse(status_code=404, content={"ok": False, "error": f"unknown port: {exc}"})
+        return JSONResponse(status_code=404, content={"ok": False, "error": t("server.error.unknown_port", name=str(exc))})
 
     @app.exception_handler(ValueError)
     async def _on_value_error(_req: Request, exc: ValueError) -> JSONResponse:
@@ -153,7 +189,7 @@ def create_app(hub: "Hub", config: "Config") -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def _on_validation_error(_req: Request, _exc: RequestValidationError) -> JSONResponse:
-        return JSONResponse(status_code=422, content={"ok": False, "error": "invalid request"})
+        return JSONResponse(status_code=422, content={"ok": False, "error": t("server.error.invalid_request")})
 
     @app.exception_handler(Exception)
     async def _on_unhandled(_req: Request, exc: Exception) -> JSONResponse:
@@ -188,6 +224,21 @@ def create_app(hub: "Hub", config: "Config") -> FastAPI:
     @app.post("/api/ports/{name}/close")
     async def api_close(name: str) -> dict[str, Any]:
         return {"ok": True, **hub.close(name)}
+
+    # ---- 运行时改设备（临时，不落盘） -------------------------------------- #
+    @app.get("/api/devices")
+    async def api_devices() -> dict[str, Any]:
+        return {"ok": True, **hub.list_devices()}
+
+    @app.post("/api/ports/{name}/device")
+    async def api_set_device(
+        name: str, body: Optional[SetDeviceBody] = None
+    ) -> dict[str, Any]:
+        b = body or SetDeviceBody()
+        return {
+            "ok": True,
+            **hub.set_device(name, device=b.device, match=b.match, reopen=b.reopen),
+        }
 
     # ---- 数据：read / search / wait ---------------------------------------- #
     @app.get("/api/ports/{name}/read")
@@ -287,7 +338,7 @@ def create_app(hub: "Hub", config: "Config") -> FastAPI:
             return {"ok": True, **hub.bridge_stop(body.port)}
         if action == "status":
             return {"ok": True, **hub.bridge_status(body.port)}
-        raise ValueError(f"unknown bridge action: {body.action!r}")
+        raise ValueError(t("server.error.unknown_bridge_action", action=body.action))
 
     @app.post("/api/reload")
     async def api_reload() -> dict[str, Any]:
@@ -295,7 +346,7 @@ def create_app(hub: "Hub", config: "Config") -> FastAPI:
 
         path = getattr(config, "path", None)
         if not path:
-            raise ValueError("no config source path to reload from")
+            raise ValueError(t("server.error.no_reload_path"))
         return {"ok": True, **hub.reload(RuntimeConfig.load(path))}
 
     @app.get("/api/config")
@@ -307,7 +358,7 @@ def create_app(hub: "Hub", config: "Config") -> FastAPI:
     async def ws_endpoint(websocket: WebSocket) -> None:
         if token and _ws_token(websocket) != token:
             await websocket.accept()
-            await websocket.send_json({"ok": False, "error": "unauthorized"})
+            await websocket.send_json({"ok": False, "error": t("server.error.unauthorized")})
             await websocket.close(code=1008)
             return
 
@@ -393,7 +444,13 @@ def create_app(hub: "Hub", config: "Config") -> FastAPI:
         index_file = STATIC_DIR / "index.html"
         if index_file.is_file():
             return FileResponse(str(index_file))
-        return JSONResponse(status_code=404, content={"ok": False, "error": "ui not built"})
+        return JSONResponse(status_code=404, content={"ok": False, "error": t("server.error.ui_not_built")})
+
+    # Outermost user middleware (added last ⇒ insert(0)): sets the per-request
+    # locale before auth/exception handlers/endpoints run, so a request with an
+    # ``Accept-Language`` header gets localized errors while header-less requests
+    # (e.g. the existing test suite) stay on the default ``en``.
+    app.add_middleware(I18nMiddleware)
 
     return app
 

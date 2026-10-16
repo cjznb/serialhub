@@ -21,8 +21,10 @@ from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 from serial.tools import list_ports as _list_ports
 
+from . import discovery
 from .config import Config, PortConfig
 from .exporter import VALID_FORMATS, export_to_file
+from .i18n import t
 from .models import Line, has_ansi, now_ms, resolve_eol
 from .ringbuffer import RingBuffer
 from .serialport import SerialPortWorker
@@ -170,7 +172,7 @@ class Hub:
         """新增端口（已存在则 ValueError）。"""
         with self._lock:
             if pc.name in self._workers:
-                raise ValueError(f"port '{pc.name}' already exists")
+                raise ValueError(t("hub.error.port_exists", name=pc.name))
             self._buffers[pc.name] = RingBuffer(pc.buffer_lines, pc.buffer_bytes)
             self._workers[pc.name] = SerialPortWorker(pc, self)
             self._config.ports.append(pc)
@@ -220,6 +222,70 @@ class Hub:
 
     def is_open(self, name: str) -> bool:
         return self._require_worker(name).is_open
+
+    def set_device(
+        self,
+        name: str,
+        *,
+        device: Optional[str] = None,
+        match: Optional[dict] = None,
+        reopen: bool = True,
+    ) -> dict:
+        """运行时、临时地改写某口的 device/match（仅内存，不落盘、不重启进程）。
+
+        必须且只能给出 ``device``/``match`` 之一，否则 ``ValueError``：
+
+        - ``device``: 非空 ``str`` → 固定设备名（同时清空 ``pc.match``）。
+        - ``match``: ``dict``，键必须 ⊂ :data:`serialhub.discovery.MATCH_KEYS`
+          （``vid``/``pid`` 经 :func:`serialhub.discovery.parse_usb_id` 校验）；
+          置空 ``pc.device``，交由 worker 在打开/重连时重新解析真实设备名。
+
+        ``reopen=True``（默认）立即重启 worker 并重新打开，缓冲/历史保留；
+        ``reopen=False`` 只改配置映射，下次 open/重连生效。未知端口名 → ``KeyError``。
+        返回与 ``open``/``status`` 相同的端口 dict（``_port_status``）。
+        """
+        if (device is None) == (match is None):
+            raise ValueError(t("hub.error.set_device_need_one"))
+        pc = self._port_config(name)
+        if device is not None:
+            if not isinstance(device, str) or not device:
+                raise ValueError(t("hub.error.set_device_device"))
+            pc.device = device
+            pc.match = None
+        else:
+            pc.match = self._validate_match(match)
+            pc.device = ""
+        if reopen:
+            worker = self._workers.get(name)
+            if worker is not None:
+                worker.close()
+            self._replace_worker(name, pc)
+            self.open(name)
+        return self._port_status(name)
+
+    def list_devices(self) -> dict:
+        """枚举系统串口设备（``serial.tools.list_ports.comports()``）。
+
+        返回 ``{"devices": [{"index", "device", "description", "hwid", "vid",
+        "pid"}...]}``，按 ``device`` 名排序，``index`` 为排序后位置。
+        """
+        try:
+            infos = list(_list_ports.comports())
+        except Exception:
+            infos = []
+        infos.sort(key=lambda p: str(getattr(p, "device", "") or ""))
+        devices = [
+            {
+                "index": i,
+                "device": str(getattr(p, "device", "") or ""),
+                "description": str(getattr(p, "description", "") or ""),
+                "hwid": str(getattr(p, "hwid", "") or ""),
+                "vid": getattr(p, "vid", None),
+                "pid": getattr(p, "pid", None),
+            }
+            for i, p in enumerate(infos)
+        ]
+        return {"devices": devices}
 
     # ---- 查询 ----
     def list_ports(self) -> dict:
@@ -323,7 +389,7 @@ class Hub:
     def export(self, name: str, *, path: Optional[str] = None, fmt: str = "raw", rng: Any = None) -> dict:
         """导出环内行；path 缺省写到 ``<cwd>/exports/<port>-<ts>.<ext>``。"""
         if fmt not in VALID_FORMATS:
-            raise ValueError(f"unknown format {fmt!r}; expected one of {list(VALID_FORMATS)}")
+            raise ValueError(t("hub.error.unknown_format", fmt=fmt, formats=list(VALID_FORMATS)))
         lines = self._require_buffer(name).snapshot()
         lo, hi = _parse_range(rng)
         if lo is not None or hi is not None:
@@ -527,6 +593,28 @@ class Hub:
             if pc.name == name:
                 return pc
         raise KeyError(name)
+
+    @staticmethod
+    def _validate_match(match: Any) -> dict:
+        """校验运行时 match 规格；非法 → ``ValueError``（消息点名违规键）。
+
+        规则与 :mod:`serialhub.discovery` 一致：必须是 mapping，键 ⊂
+        ``MATCH_KEYS``，``vid``/``pid`` 经 :func:`discovery.parse_usb_id` 校验。
+        """
+        if not isinstance(match, dict):
+            raise ValueError(t("hub.error.set_device_match_type"))
+        for key in match:
+            if key not in discovery.MATCH_KEYS:
+                raise ValueError(t("hub.error.set_device_match_key", bad_key=key))
+        for key in ("vid", "pid"):
+            if key in match:
+                try:
+                    discovery.parse_usb_id(match[key])
+                except ValueError as exc:
+                    raise ValueError(
+                        t("hub.error.set_device_usb", bad_key=key, value=match[key])
+                    ) from exc
+        return dict(match)
 
     def _replace_worker(self, name: str, pc: PortConfig) -> None:
         with self._lock:

@@ -110,6 +110,18 @@ class Client:
     def close(self, name: str) -> dict[str, Any]:
         return self.call("POST", self._port_path(name, "close"))
 
+    def set_device(self, name: str, device: Optional[str] = None,
+                   match: Optional[dict[str, Any]] = None,
+                   reopen: bool = True) -> dict[str, Any]:
+        """Remap a port's device/match at runtime (transient; no config write)."""
+        return self.call("POST", self._port_path(name, "device"), body={
+            "device": device, "match": match, "reopen": reopen,
+        })
+
+    def discover(self) -> dict[str, Any]:
+        """Enumerate system serial devices (indexed, sorted by device name)."""
+        return self.call("GET", "/api/devices")
+
     def read(self, name: str, *, since_seq: Optional[int] = None,
              since_ts: Optional[int] = None, filter: Optional[str] = None,
              limit: Optional[int] = None, strip_ansi: bool = False,

@@ -18,6 +18,7 @@ import sys
 from typing import Any, Optional
 
 from .client import DEFAULT_URL, Client
+from .i18n import t
 
 DEFAULT_EOL = "\r\n"
 _EOL_TOKENS = {"crlf", "lf", "cr", "none"}
@@ -48,6 +49,36 @@ def _read_send_data(data: str) -> str:
     return text
 
 
+def _parse_match_arg(text: str) -> dict[str, Any]:
+    """Parse ``--match``: a JSON object, or compact ``k=v`` pairs.
+
+    Examples: ``'{"description": "CH340"}'`` or ``description=CH340,vid=0x1A86``.
+    Raises ``ValueError`` on malformed input; the caller turns it into an error
+    envelope.
+    """
+    text = text.strip()
+    if text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(t("cli.error.match_json", text=text)) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(t("cli.error.match_not_object", text=text))
+        return parsed
+    spec: dict[str, Any] = {}
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        key, sep, value = part.partition("=")
+        if not sep or not key.strip():
+            raise ValueError(t("cli.error.match_pairs", text=text))
+        spec[key.strip()] = value.strip()
+    if not spec:
+        raise ValueError(t("cli.error.match_pairs", text=text))
+    return spec
+
+
 def _global_options(args: argparse.Namespace) -> tuple[str, Optional[str]]:
     url = getattr(args, "url", None) or DEFAULT_URL
     token = getattr(args, "token", None) or os.environ.get("SERIALHUB_TOKEN") or None
@@ -71,11 +102,11 @@ def _print_env(env: dict[str, Any]) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parent = argparse.ArgumentParser(add_help=False)
     parent.add_argument("--url", default=argparse.SUPPRESS,
-                        help="daemon base URL (default http://127.0.0.1:8765)")
+                        help=t("cli.opt.url"))
     parent.add_argument("--token", default=argparse.SUPPRESS,
-                        help="Bearer token (or env SERIALHUB_TOKEN)")
+                        help=t("cli.opt.token"))
 
-    parser = argparse.ArgumentParser(prog="serialhub", description="serialhub CLI",
+    parser = argparse.ArgumentParser(prog="serialhub", description=t("cli.description"),
                                      parents=[parent])
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
@@ -83,85 +114,93 @@ def _build_parser() -> argparse.ArgumentParser:
     def add(name: str, **kw: Any) -> argparse.ArgumentParser:
         return sub.add_parser(name, parents=[parent], **kw)
 
-    add("list", help="list configured ports (GET /api/ports)")
-    add("ports", help="alias of list")
+    add("list", help=t("cli.cmd.list"))
+    add("ports", help=t("cli.cmd.ports"))
 
-    p = add("status", help="daemon/port status")
+    p = add("status", help=t("cli.cmd.status"))
     p.add_argument("name", nargs="?", default=None)
 
-    p = add("open", help="open a port")
+    p = add("open", help=t("cli.cmd.open"))
     p.add_argument("name")
     p.add_argument("--baud", type=int, default=None)
     p.add_argument("--device", default=None)
 
-    p = add("close", help="close a port")
+    p = add("close", help=t("cli.cmd.close"))
     p.add_argument("name")
 
-    p = add("read", help="read buffered lines")
+    p = add("set-device", help=t("cli.cmd.set_device"))
+    p.add_argument("name")
+    p.add_argument("--device", default=None)
+    p.add_argument("--match", default=None, help=t("cli.arg.match"))
+    p.add_argument("--no-reopen", action="store_true", help=t("cli.arg.no_reopen"))
+
+    add("discover", help=t("cli.cmd.discover"))
+
+    p = add("read", help=t("cli.cmd.read"))
     p.add_argument("name")
     p.add_argument("--since-seq", type=int, default=None)
     p.add_argument("--since-ts", type=int, default=None)
-    p.add_argument("--filter", default=None, help="regex filter")
+    p.add_argument("--filter", default=None, help=t("cli.arg.filter"))
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--strip-ansi", action="store_true")
-    p.add_argument("--kinds", default=None, help="comma-separated: rx,tx,mark")
+    p.add_argument("--kinds", default=None, help=t("cli.arg.kinds"))
 
-    p = add("search", help="search buffered lines by regex")
+    p = add("search", help=t("cli.cmd.search"))
     p.add_argument("name")
     p.add_argument("regex")
     p.add_argument("--context", type=int, default=0)
     p.add_argument("--since-seq", type=int, default=None)
     p.add_argument("--limit", type=int, default=None)
 
-    p = add("wait", help="block until a regex matches")
+    p = add("wait", help=t("cli.cmd.wait"))
     p.add_argument("name")
     p.add_argument("regex")
     p.add_argument("--timeout-ms", type=int, default=10000)
     p.add_argument("--since-seq", type=int, default=None)
 
-    p = add("send", help="send data to a port")
+    p = add("send", help=t("cli.cmd.send"))
     p.add_argument("name")
-    p.add_argument("data", help="payload; '-' reads stdin (one trailing newline stripped)")
-    p.add_argument("--eol", default=None, help="crlf|lf|cr|none or escapes (default \\r\\n)")
+    p.add_argument("data", help=t("cli.arg.send_data"))
+    p.add_argument("--eol", default=None, help=t("cli.arg.eol"))
     p.add_argument("--wait-regex", default=None)
     p.add_argument("--timeout-ms", type=int, default=None)
 
-    p = add("snapshot", help="dump the tail of a port buffer")
+    p = add("snapshot", help=t("cli.cmd.snapshot"))
     p.add_argument("name")
     p.add_argument("--tail-lines", type=int, default=200)
 
-    p = add("export", help="export buffered lines to a file")
+    p = add("export", help=t("cli.cmd.export"))
     p.add_argument("name")
     p.add_argument("--path", default=None)
     p.add_argument("--format", default="raw", choices=["raw", "noansi", "json"])
-    p.add_argument("--range", default=None, help="optional range selector for the daemon")
+    p.add_argument("--range", default=None, help=t("cli.arg.range"))
 
-    p = add("mark", help="insert a marker line")
+    p = add("mark", help=t("cli.cmd.mark"))
     p.add_argument("name")
     p.add_argument("label")
 
-    p = add("clear", help="clear a port buffer")
+    p = add("clear", help=t("cli.cmd.clear"))
     p.add_argument("name")
 
-    p = add("bridge", help="start/stop/inspect a TCP bridge")
+    p = add("bridge", help=t("cli.cmd.bridge"))
     p.add_argument("action", choices=["start", "stop", "status"])
     p.add_argument("--port", required=True)
     p.add_argument("--mode", default="server", choices=["server", "client"])
     p.add_argument("--tcp-port", type=int, default=None)
     p.add_argument("--host", default=None)
 
-    add("reload", help="hot-reload the daemon config")
+    add("reload", help=t("cli.cmd.reload"))
 
-    p = add("serve", help="run the serialhub daemon")
+    p = add("serve", help=t("cli.cmd.serve"))
     p.add_argument("--config", required=True)
     p.add_argument("--host", default=None)
     p.add_argument("--port", type=int, default=None)
     p.add_argument("--no-autostart", action="store_true")
     p.add_argument("--log-level", default=None)
 
-    p = add("mcp", help="run the MCP server (stdio)")
-    p.add_argument("--stdio", action="store_true", help="use stdio transport (default)")
-    p.add_argument("--transport", default="stdio", help="stdio|sse|streamable-http")
+    p = add("mcp", help=t("cli.cmd.mcp"))
+    p.add_argument("--stdio", action="store_true", help=t("cli.arg.stdio"))
+    p.add_argument("--transport", default="stdio", help=t("cli.arg.transport"))
 
     return parser
 
@@ -180,6 +219,19 @@ def _dispatch(command: str, args: argparse.Namespace) -> int:
         env = client.open(args.name, baud=args.baud, device=args.device)
     elif command == "close":
         env = client.close(args.name)
+    elif command == "set-device":
+        if (args.device is None) == (args.match is None):
+            env = {"ok": False, "error": t("cli.error.set_device_one")}
+        else:
+            try:
+                match = _parse_match_arg(args.match) if args.match is not None else None
+            except ValueError as exc:
+                env = {"ok": False, "error": str(exc)}
+            else:
+                env = client.set_device(args.name, device=args.device, match=match,
+                                        reopen=not args.no_reopen)
+    elif command == "discover":
+        env = client.discover()
     elif command == "read":
         env = client.read(args.name, since_seq=args.since_seq, since_ts=args.since_ts,
                           filter=args.filter, limit=args.limit,
