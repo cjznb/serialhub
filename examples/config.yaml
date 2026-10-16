@@ -1,0 +1,94 @@
+# serialhub 配置示例（在 config.example.yaml 基础上改为「开箱即跑」）
+# 用法：
+#   python -m serialhub serve --config examples/config.yaml
+#   # 或（已 pip install -e .）：
+#   serialhub serve --config examples/config.yaml
+#
+# 本文件默认只启用一个 loop:// 演示口（无需任何硬件），另附数个带注释的真实口模板。
+# 需要真实口时，取消相应注释并改 device 即可。
+# 格式：YAML 或 JSON 均可（按扩展名 .yaml/.yml 走 YAML，其它走 JSON）。
+
+server:
+  host: 127.0.0.1        # Web/HTTP 监听地址（对局域网开放用 0.0.0.0）
+  port: 8765             # Web/HTTP 监听端口
+  token: null            # 可选 Bearer Token；非空时 /api/* 与 /ws 均需鉴权
+  cors: true             # 是否允许跨域（开发期方便）
+
+# 所有串口的默认参数（可被每个 ports[] 条目逐项覆盖）。
+# 字段与取值：baud / data_bits(5|6|7|8) / parity(N|E|O|M|S) / stop_bits(1|1.5|2)
+#            / flow(none|rtscts|xonxoff|dsrdtr) / dtr / rts / eol / encoding
+#            / reconnect_ms / reconnect_max_ms / flush_ms / buffer_lines / buffer_bytes / autostart
+defaults:
+  baud: 115200
+  data_bits: 8
+  parity: N
+  stop_bits: 1
+  flow: none
+  dtr: true
+  rts: true
+  eol: "\r\n"            # send 默认结尾；也支持 none / \n / \r / 自定义字面量
+  encoding: utf-8
+  reconnect_ms: 1000     # 断线重连初始间隔
+  reconnect_max_ms: 10000   # 重连退避上限
+  flush_ms: 50           # 无换行的残行，超过此毫秒数也作为一行吐出
+  buffer_lines: 20000    # 每口环形缓冲保留的最大行数
+  buffer_bytes: 8388608  # 每口环形缓冲保留的最大字节数（8 MiB）
+  autostart: true        # 守护进程启动时是否立即打开
+
+# 当某口未显式给出 buffer_lines / buffer_bytes 时的兜底（同 defaults.buffer_*）。
+buffer_defaults:
+  lines: 20000
+  bytes: 8388608
+
+ports:
+  # ---- 演示口：loop:// 回环，写出的字节原样读回，无需硬件 ----
+  - name: demo
+    device: loop://
+    baud: 115200
+    autostart: true
+    # 无硬件即可验证：open -> send -> read -> wait_for
+
+  # ---- 实机口（本机 USB 转串口；115200 8N1）----
+  # 用 match 自动发现设备：不再写死 COM 号，拔插后换到别的 COM 也能找回。
+  # match 支持的全部键（未给出的忽略）：description/hwid/device/serial 子串（不分大小写）、
+  #   vid/pid（如 0x1A86 / "0x1A86" / 46230）、index（同分时的第 N 个，按 device 排序，默认 0）。
+  # 也可用固定 device 锁定（如 device: COM11，固定值优先于 match）。
+  # description 即「备注」，会出现在 list_ports / status / Web UI 里，便于 agent 与人类辨识。
+  #   COM11 = ESP32C6（CH343，VID:PID=1A86:55D3）；COM12 = STM32H750（CH340，VID:PID=1A86:7523）
+  - name: c6
+    # 等价写法： match: { vid: 0x1A86, pid: 0x55D3 }
+    match: { description: "CH343" }
+    description: ESP32C6
+    baud: 115200
+    data_bits: 8
+    parity: N
+    stop_bits: 1
+    autostart: true
+
+  - name: stm32
+    # 等价写法： match: { vid: 0x1A86, pid: 0x7523 }
+    match: { description: "CH340" }
+    description: STM32H750
+    baud: 115200
+    data_bits: 8
+    parity: N
+    stop_bits: 1
+    autostart: true
+
+  # ---- 其它真实口模板（按需复制修改）----
+  # - name: linaro
+  #   device: /dev/ttyUSB0       # Linux 直连；亦可 socket://host:port / rfc2217://...
+  #   description: 某开发板
+  #   baud: 115200
+  #   # tcp_bridge: { mode: server, port: 4001 }   # 可选：暴露为 TCP 桥
+
+logging:
+  enabled: false           # 是否把每口收到的数据滚动落盘
+  dir: logs
+  max_mb: 16               # 单文件滚动阈值
+  backups: 3               # 保留的历史文件数
+
+ui:
+  theme: dark              # dark|light
+  timestamp: true          # Web UI 默认是否显示每行时间戳
+  max_render_lines: 5000   # 前端保留的最大渲染行（虚拟滚动窗口）

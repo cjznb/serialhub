@@ -44,10 +44,22 @@ ports:
       # host: 192.168.1.50   # mode=client 时的远端主机
       # port: 4002
 
+  # 也可用 match 自动发现设备：省略 device，改为一份匹配规格；打开时与每次重连前
+  # 都会重新解析出当前真实 COM，故拔插换号也能找回。固定 device 与 match 可并存——
+  # 一旦写了非空 device 就固定用它（固定值优先）。
+  # match 支持的全部键（未给出的忽略，全为“与”关系）：
+  #   description: "CH340"   # 对 p.description 做不分大小写子串匹配
+  #   hwid:        "7523"    # 对 p.hwid 子串匹配
+  #   device:      "COM"     # 对 p.device 子串匹配
+  #   serial:      "5A46"    # 对 p.serial_number 子串匹配
+  #   vid: 0x1A86            # 亦接受 "0x1A86" / 46230；精确比较 p.vid
+  #   pid: 0x7523            # 精确比较 p.pid
+  #   index: 0               # 多个候选同分时取（按 device 名排序）第 N 个，默认 0
   - name: c6
-    device: COM12
+    match: { description: "CH343" }   # 例：ESP32C6（CH343，VID:PID=1A86:55D3）
+    # 等价写法： match: { vid: 0x1A86, pid: 0x55D3 }
     baud: 115200
-    autostart: false     # 不随守护进程自动打开，等 agent/web 显式 open
+    autostart: false       # 不随守护进程自动打开，等 agent/web 显式 open
     eol: "\n"
 
 logging:

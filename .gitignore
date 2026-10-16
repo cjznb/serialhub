@@ -20,7 +20,7 @@ out/
 *.jsonl
 
 # Local config (may hold device paths / tokens)
-config.yaml
+/config.yaml
 config.local.yaml
 config.local.json
 

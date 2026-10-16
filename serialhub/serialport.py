@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Optional
 
 import serial
 
+from . import discovery
 from .models import now_ms
 
 if TYPE_CHECKING:  # 仅类型标注，避免与 hub 形成运行期循环导入
@@ -60,6 +61,8 @@ class SerialPortWorker(threading.Thread):
         self._tx_lines: int = 0
         self._encoding: str = getattr(pc, "encoding", None) or "utf-8"
         self._flush_ms: int = max(0, int(getattr(pc, "flush_ms", 50)))
+        # 是否用 match 自动发现设备：为真时每次连接/重连前重新解析真实设备名。
+        self._uses_match: bool = bool(getattr(pc, "match", None))
         self._state_lock = threading.RLock()
         self._io_lock = threading.Lock()
         self._counters_lock = threading.Lock()
@@ -91,6 +94,12 @@ class SerialPortWorker(threading.Thread):
     def tx_lines(self) -> int:
         with self._counters_lock:
             return self._tx_lines
+
+    @property
+    def resolved_device(self) -> str:
+        """当前解析到的真实设备名（match 端口为发现的 COM，固定端口即配置值）。"""
+        with self._state_lock:
+            return self._pc.device
 
     # ---- 生命周期 ----
     def open(self) -> None:
@@ -124,6 +133,7 @@ class SerialPortWorker(threading.Thread):
             self._pc = pc
             self._encoding = getattr(pc, "encoding", None) or "utf-8"
             self._flush_ms = max(0, int(getattr(pc, "flush_ms", 50)))
+            self._uses_match = bool(getattr(pc, "match", None))
 
     def write(self, data: bytes) -> int:
         """线程安全写串口（原始字节，不追加 EOL）；未打开 → RuntimeError。"""
@@ -160,14 +170,47 @@ class SerialPortWorker(threading.Thread):
             }
 
     # ---- 连接 ----
+    def _resolve_device(self) -> Optional[str]:
+        """match 端口：重新解析真实设备名并写回 ``pc.device``。
+
+        每次连接/重连前调用（先把 ``pc.device`` 清空以强制重解析），这样设备拔插
+        后换到别的 COM 仍能找回。无命中或解析异常 → 置 ``last_error``、返回 None，
+        不抛异常、不崩溃，交由外层退避重试。
+        """
+        pc = self._pc
+        pc.device = ""
+        try:
+            found = discovery.resolve(pc.match or {})
+        except Exception as exc:
+            self._last_error = f"discovery: {type(exc).__name__}: {exc}"
+            self._open = False
+            self._serial = None
+            self._broadcast_status()
+            return None
+        device = found.get("device")
+        if not device:
+            self._last_error = f"no device matched: {discovery.describe(pc.match or {})}"
+            self._open = False
+            self._serial = None
+            self._broadcast_status()
+            return None
+        pc.device = device
+        return device
+
     def _try_connect(self) -> bool:
         """在 _state_lock 下尝试建立连接；成功 True，失败 False（置 last_error）。"""
         if self._open and self._serial is not None:
             return True
         pc = self._pc
+        if self._uses_match:
+            device = self._resolve_device()
+            if device is None:
+                return False
+        else:
+            device = pc.device
         try:
             ser = serial.serial_for_url(
-                pc.device,
+                device,
                 baudrate=pc.baud,
                 bytesize=pc.data_bits,
                 parity=pc.parity,
@@ -191,6 +234,8 @@ class SerialPortWorker(threading.Thread):
             self._last_error = f"dtr/rts: {type(exc).__name__}: {exc}"
         self._serial = ser
         self._open = True
+        if self._uses_match:
+            self._last_error = None  # 连接成功即清掉“未发现/重连”错误
         self._broadcast_status()
         return True
 

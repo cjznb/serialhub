@@ -20,6 +20,8 @@ from typing import Any, Optional
 
 import yaml
 
+from .discovery import MATCH_KEYS, parse_usb_id
+
 __all__ = [
     "ServerConfig",
     "PortConfig",
@@ -37,8 +39,11 @@ _PORT_FIELDS = {
     "name", "device", "baud", "data_bits", "parity", "stop_bits", "flow",
     "dtr", "rts", "eol", "encoding", "reconnect_ms", "reconnect_max_ms",
     "flush_ms", "buffer_lines", "buffer_bytes", "autostart", "tcp_bridge",
-    "description",
+    "description", "match",
 }
+
+#: match 规格里允许出现的键（与 discovery.MATCH_KEYS 同源）。
+_VALID_MATCH_KEYS = set(MATCH_KEYS)
 
 
 @dataclass
@@ -56,7 +61,7 @@ class PortConfig:
     """单个串口配置。"""
 
     name: str
-    device: str
+    device: str = ""           # 固定设备名；留空时由 match 自动解析（见 serialhub.discovery）
     description: str = ""      # 备注：自由文本，透传到 list_ports/status，便于辨识设备
     baud: int = 115200
     data_bits: int = 8
@@ -74,6 +79,7 @@ class PortConfig:
     buffer_bytes: int = 8 * 1024 * 1024
     autostart: bool = True
     tcp_bridge: Optional[dict] = None
+    match: Optional[dict] = None   # 自动发现规格（device 为空时使用）：VID/PID、描述子串等
 
 
 @dataclass
@@ -160,8 +166,13 @@ class Config:
             path_label = f"ports[{name}]" if name else f"ports[{index}]"
             if not name or not isinstance(name, str):
                 raise ValueError(f"{path_label}.name must be a non-empty string")
-            if not kwargs.get("device") or not isinstance(kwargs.get("device"), str):
-                raise ValueError(f"{path_label}.device must be a non-empty string")
+            device_raw = kwargs.get("device")
+            if device_raw is not None and not isinstance(device_raw, str):
+                raise ValueError(f"{path_label}.device must be a string")
+            if not device_raw and not kwargs.get("match"):
+                raise ValueError(
+                    f"{path_label} must have a non-empty 'device' or a 'match' spec"
+                )
             pc = _build(PortConfig, kwargs, path_label)
             _validate_port(pc, path_label)
             if pc.name in seen:
@@ -304,8 +315,37 @@ def _validate_port(pc: PortConfig, path_label: str) -> None:
         raise ValueError(f"{path_label}.flush_ms must be >= 0, got {pc.flush_ms!r}")
     if not pc.name:
         raise ValueError(f"{path_label}.name must be non-empty")
-    if not pc.device:
-        raise ValueError(f"{path_label}.device must be non-empty")
+    if not pc.device and not pc.match:
+        raise ValueError(
+            f"{path_label} must have a non-empty 'device' or a 'match' spec"
+        )
+    if pc.match is not None:
+        _validate_match(pc.match, f"{path_label}.match")
+
+
+def _validate_match(match: Any, path_label: str) -> None:
+    """校验 match 规格；未知键 / 非法 vid,pid,index → ValueError（含字段路径）。"""
+    if not isinstance(match, dict):
+        raise ValueError(f"{path_label} must be a mapping")
+    for key in match:
+        if key not in _VALID_MATCH_KEYS:
+            raise ValueError(
+                f"{path_label}.{key} is not a valid match key "
+                f"(allowed: {sorted(_VALID_MATCH_KEYS)})"
+            )
+    for key in ("description", "hwid", "device", "serial"):
+        if key in match and not isinstance(match[key], str):
+            raise ValueError(f"{path_label}.{key} must be a string")
+    for key in ("vid", "pid"):
+        if key in match:
+            try:
+                parse_usb_id(match[key])
+            except ValueError as exc:
+                raise ValueError(f"{path_label}.{key}: {exc}") from exc
+    if "index" in match:
+        idx = _as_int(match["index"], f"{path_label}.index")
+        if idx < 0:
+            raise ValueError(f"{path_label}.index must be >= 0, got {idx!r}")
 
 
 def _port_to_dict(pc: PortConfig) -> dict:
@@ -313,6 +353,7 @@ def _port_to_dict(pc: PortConfig) -> dict:
         "name": pc.name,
         "device": pc.device,
         "description": pc.description,
+        "match": copy.deepcopy(pc.match),
         "baud": pc.baud,
         "data_bits": pc.data_bits,
         "parity": pc.parity,
