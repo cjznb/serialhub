@@ -138,6 +138,7 @@ const I18N = {
     toastExported: "Exported {n} lines ({fmt}) \u2192 {file}",
     toastNoMatches: "No matches in server history.",
     toastOutsideBuffer: "Line #{seq} is outside the local buffer.",
+    copied: "Copied {n} chars",
   },
   zh: {
     docTitle: "serialhub · 串口控制台",
@@ -214,6 +215,7 @@ const I18N = {
     toastExported: "已导出 {n} 行（{fmt}）\u2192 {file}",
     toastNoMatches: "服务端历史中无匹配。",
     toastOutsideBuffer: "第 #{seq} 行不在本地缓冲内。",
+    copied: "已复制 {n} 字符",
   },
 };
 
@@ -393,6 +395,7 @@ const termHosts = new WeakMap();
 
 function createRuntime(name) {
   const tpl = $("#paneTemplate").content.firstElementChild.cloneNode(true);
+  applyI18n(tpl);   // translate the freshly cloned pane into the current language
   const rt = {
     name,
     pane: tpl,
@@ -425,6 +428,64 @@ function createRuntime(name) {
   return rt;
 }
 
+/* clipboard: xterm renders its own selection (no native DOM selection), so we
+   wire Ctrl+C / Ctrl+Insert to copy it; keys without a selection pass through
+   untouched so the serial console still receives control bytes (e.g. ^C). */
+function fallbackCopy(text) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.left = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    const sel = document.getSelection();
+    const prev = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (sel) { sel.removeAllRanges(); if (prev) sel.addRange(prev); }
+    return !!ok;
+  } catch (_e) { return false; }
+}
+function copyText(text) {
+  return new Promise((resolve) => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(() => resolve(true))
+        .catch(() => resolve(fallbackCopy(text)));
+    } else {
+      resolve(fallbackCopy(text));
+    }
+  });
+}
+function copySelection(text) {
+  if (!text) return;
+  copyText(text).then((ok) => { if (ok) toast(t("copied", { n: text.length }), "ok"); });
+}
+function isCopyChord(event) {
+  if (!event.ctrlKey || event.altKey || event.metaKey) return false;
+  if (event.code === "KeyC" || event.key === "c" || event.key === "C") return true;   // Ctrl+C
+  if (event.code === "Insert" || event.key === "Insert") return true;                 // Ctrl+Insert
+  return false;
+}
+function attachCopyHandler(rt, term) {
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.type !== "keydown") return true;              // never touch keyup/keypress
+    if (isCopyChord(event) && term.hasSelection()) {
+      copySelection(term.getSelection());
+      return false;                                         // handled — do NOT send to serial
+    }
+    return true;                                            // everything else passes through
+  });
+  // Right-click with a live selection copies it too (discoverability).
+  rt.el.termHost.addEventListener("contextmenu", (event) => {
+    if (term.hasSelection()) { event.preventDefault(); copySelection(term.getSelection()); }
+  });
+}
+
 function createTerminal(rt) {
   if (state.termFallback || typeof window.Terminal === "undefined") {
     rt.el.termHost.hidden = true;
@@ -444,6 +505,7 @@ function createTerminal(rt) {
     theme: XTERM_THEME[state.theme] || XTERM_THEME.dark,
   });
   rt.term = term;
+  attachCopyHandler(rt, term);
   if (window.FitAddon && window.FitAddon.FitAddon) {
     rt.fit = new window.FitAddon.FitAddon();
     term.loadAddon(rt.fit);
