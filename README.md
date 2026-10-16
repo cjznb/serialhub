@@ -31,6 +31,7 @@ in a browser; both `python -m serialhub list` on the command line and MCP `wait_
 | Capability | Description |
 |---|---|
 | Persistent multi-port | One reader thread per port; held open and reconnected with exponential backoff on disconnect (**old buffer is kept**) |
+| Auto-discovery | A port may use a `match` spec instead of a fixed `device`; resolved at **open** and **re-resolved on every reconnect**, so a replugged adapter on a new COM is still found |
 | Ring buffer | Per port, evicts the oldest lines on a dual threshold of **line count + bytes**; default 20000 lines / 8 MiB |
 | Global sequence | `seq` is monotonic across all ports and thread-safe; `ts_ms` is the epoch-ms receive time |
 | Line kind | `kind ∈ {rx, tx, mark}`: received / sent by this process (echo) / marker |
@@ -42,7 +43,7 @@ in a browser; both `python -m serialhub list` on the command line and MCP `wait_
 | Web UI | Dark/light, multi-tab, ANSI color, timestamps/seq, filter/search, pause/clear, export, send bar |
 | TCP bridge | server (listen; client writes go down to the serial port) / client (dial a remote and relay) |
 | CLI | Every subcommand prints a **single line of JSON** `{"ok":true,"data":{...}}`, exit code 0/1 |
-| MCP | 14 tools (stdio) that let an agent drive the serial port through tool calls |
+| MCP | 16 tools (stdio) that let an agent drive the serial port through tool calls |
 | Hot reload | After editing config, `serialhub reload` applies added/removed ports, changed params, and rebuilt buffers immediately |
 | No-hardware demo | `device: loop://` runs the full open→send→read→wait_for loop with no hardware |
 
@@ -55,7 +56,7 @@ serialhub/
 ├── README.md                 # this file (user manual)
 ├── docs/
 │   ├── ARCHITECTURE.md        # the frozen contract (single source of truth)
-│   └── MCP.md                 # MCP guide (14-tool reference + agent manual)
+│   └── MCP.md                 # MCP guide (16-tool reference + agent manual)
 ├── examples/
 │   ├── config.yaml            # loop:// demo + a commented real port
 │   ├── mcp_client.py          # a runnable programmatic client example
@@ -69,7 +70,7 @@ serialhub/
 │   ├── __main__.py            # python -m serialhub entry
 │   ├── cli.py                 # command line (serve/list/open/read/wait/send/bridge/mcp/...)
 │   ├── client.py              # HTTP thin client (stdlib, shared by CLI/MCP)
-│   ├── mcp_server.py          # the 14 MCP tools (stdio)
+│   ├── mcp_server.py          # the 16 MCP tools (stdio)
 │   ├── mcp_compat.py          # mcp 1.x/2.x compatibility shim
 │   ├── server.py              # FastAPI + REST + WS + static UI
 │   ├── hub.py                 # the hub (ports/buffers/broadcast/bridges/waiting)
@@ -78,6 +79,7 @@ serialhub/
 │   ├── tcp_bridge.py          # TCP bridge
 │   ├── exporter.py            # export formatting
 │   ├── config.py              # config model / loading / validation
+│   ├── discovery.py           # port auto-discovery (match spec -> real device name)
 │   ├── models.py              # Line / ANSI / EOL / now_ms
 │   └── static/                # Web UI (index.html + app.js + style.css)
 ├── tests/                     # unit/integration tests
@@ -195,15 +197,48 @@ There is also an optional top-level `buffer_defaults` section (`{lines, bytes}`)
 
 ### 5.3 `ports[]` (the port list)
 
-Each entry has at least `name` (unique, non-empty) and `device`; the remaining keys share names with
-`defaults` and override them per entry. Additional keys:
+Each entry has `name` (unique, non-empty) plus **either** `device` (fixed) **or** `match` (auto-discovery);
+the remaining keys share names with `defaults` and override them per entry. Additional keys:
 
 | Field | Type | Notes |
 |---|---|---|
 | `name` | str | Logical port name (used by `list`/`open`/`read`) |
-| `device` | str | `COMx` / `/dev/ttyUSB0` / pyserial URL: `loop://`, `socket://host:port`, `rfc2217://...` |
+| `device` | str | Fixed device: `COMx` / `/dev/ttyUSB0` / pyserial URL (`loop://`, `socket://host:port`, `rfc2217://...`). If both `device` and `match` are given, `device` wins |
+| `match` | dict\|null | Auto-discovery spec (used when `device` is empty). See §5.3.1 |
 | `description` | str | Optional free-text note. Passed through to `list_ports`/`status`/Web UI to identify the device (e.g. `ESP32C6`) |
 | `tcp_bridge` | dict\|null | Optional: `{mode: server\|client, port: <int>, host: <str\|null>}`; the daemon starts the bridge automatically at boot |
+
+#### 5.3.1 `match` (port auto-discovery)
+
+Instead of a fixed `device`, a port can carry a `match` spec. The daemon resolves it to the current real
+device name (e.g. `COM12`) at **open** and **re-resolves on every reconnect**, so a replugged adapter that
+comes back on a different COM is still found; the resolved COM is written back, so `list` / `status` / Web UI
+show it. A port that matches nothing shows `last_error: no device matched: ...` and keeps retrying.
+
+| `match` key | Type | Semantics |
+|---|---|---|
+| `description` | str | Case-insensitive **substring** against the port description |
+| `hwid` | str | Case-insensitive **substring** against `hwid` |
+| `device` | str | Case-insensitive **substring** against the device name (e.g. `"COM"`) |
+| `serial` | str | Case-insensitive **substring** against the serial number |
+| `vid` | int\|str | **Exact** USB vendor id; accepts int or hex string (`0x1A86` / `"0x1A86"` / `46230`) |
+| `pid` | int\|str | **Exact** USB product id (same forms as `vid`) |
+| `index` | int | When several ports match equally, pick the Nth (after sorting by device name); default `0` |
+
+All keys are optional and combined with AND; unknown keys are rejected. The real pattern from
+[`examples/config.yaml`](examples/config.yaml):
+
+```yaml
+ports:
+  - name: c6
+    match: { description: "CH343" }   # ESP32C6 (CH343)
+  - name: stm32
+    match: { description: "CH340" }   # STM32H750 (CH340)
+  # equivalent: match: { vid: 0x1A86, pid: 0x7523 }
+```
+
+To repoint a port at runtime without editing the config, use `set-device` (§7.1, §9.3) or
+`open NAME --device COMx`; that remap is **transient** (see §7.1).
 
 ### 5.4 `logging` / `ui`
 
@@ -244,8 +279,10 @@ ui:
 
 Validation rules (validated on load; an invalid config raises `ValueError` with a message that includes
 the field path, such as `ports[console].data_bits`):
-`name` unique and non-empty, `device` non-empty, `data_bits∈{5,6,7,8}`, `parity∈{N,E,O,M,S}`,
-`stop_bits∈{1,1.5,2}`, `flow∈{none,rtscts,xonxoff,dsrdtr}`, `buffer_lines>0`, `buffer_bytes>0`.
+`name` unique and non-empty, a non-empty `device` **or** a `match` spec, `data_bits∈{5,6,7,8}`, `parity∈{N,E,O,M,S}`,
+`stop_bits∈{1,1.5,2}`, `flow∈{none,rtscts,xonxoff,dsrdtr}`, `buffer_lines>0`, `buffer_bytes>0`. A `match` spec
+accepts only the keys in §5.3.1; unknown keys, a non-string `description`/`hwid`/`device`/`serial`, an invalid
+`vid`/`pid`, and a negative `index` all raise.
 
 ---
 
@@ -274,6 +311,8 @@ Open `http://127.0.0.1:8765/`. Dark by default, with a light toggle in the top-r
 
 > The UI works over `/api/*` and `/ws`; the first WS frame pushes `hello` (port overview), then it pushes `line` / `status` / `mark` events.
 
+> **Language / 语言**: the Web UI has an `EN | 中文` switcher (your choice is persisted). Backend messages follow the `SERIALHUB_LANG` environment variable, else the HTTP `Accept-Language` header. To add a language, see [`docs/I18N.md`](docs/I18N.md).
+
 ---
 
 ## 7. CLI usage
@@ -295,8 +334,10 @@ Exit codes: `0`=success, `1`=failure. Global options: `--url` (default `http://1
 |---|---|---|---|
 | `serve` | `--config F` `[--host]` `[--port]` `[--no-autostart]` `[--log-level]` | (local) | Run the daemon (prints no JSON) |
 | `list` (alias `ports`) | - | `GET /api/ports` | List system serial ports + configured ports |
+| `discover` | - | `GET /api/devices` | Enumerate system serial devices (indexed, sorted by device name) |
 | `status` | `[NAME]` | `GET /api/status` | Overall or single-port status |
-| `open` | `NAME` `[--baud]` `[--device]` | `POST /api/ports/{n}/open` | Open (optionally override baud/device) |
+| `open` | `NAME` `[--baud]` `[--device]` | `POST /api/ports/{n}/open` | Open (optionally override baud/device; `--device` also performs a transient remap) |
+| `set-device` | `NAME` `[--device COMx]` `[--match SPEC]` `[--no-reopen]` | `POST /api/ports/{n}/device` | Remap which device a port uses at runtime (**transient**, see below) |
 | `close` | `NAME` | `POST /api/ports/{n}/close` | Close (buffer kept) |
 | `read` | `NAME` `[--since-seq]` `[--since-ts]` `[--filter]` `[--limit]` `[--strip-ansi]` `[--kinds]` | `GET .../read` | Incrementally read buffered lines |
 | `search` | `NAME REGEX` `[--context]` `[--since-seq]` `[--limit]` | `GET .../search` | Regex search (optionally with context) |
@@ -316,6 +357,8 @@ Argument details:
 - `search`'s `regex` and `read`'s `--filter` are different names (the former locates hits and supports context; the latter only filters).
 - `send`'s `DATA` reads from stdin when passed `-` (one trailing newline is stripped); `--eol` accepts `crlf|lf|cr|none` or an escaped literal, defaulting to that port's `eol`.
 - The timeout unit for `wait` / `send` is **milliseconds** (`--timeout-ms`).
+- `set-device` requires **exactly one** of `--device` / `--match`; `--match` takes a JSON object (`'{"vid":0x1A86,"pid":0x7523}'`) or compact pairs (`description=CH340,vid=0x1A86`). `--no-reopen` changes only the in-memory mapping (applied on the next open/reconnect); the default reopens the port now (buffer kept).
+- **Runtime remap is transient**: `set-device` (and `open --device`) only change the in-memory mapping; nothing is written to the config file. To persist, edit the config and run `reload`.
 
 ### 7.2 Common examples
 
@@ -417,7 +460,7 @@ The MCP server lets an agent drive serial ports **through tool calls** (rather t
 every tool calls the persistent daemon over HTTP, so you **must `serve` first**. The transport is **stdio**
 (the common local approach for opencode / Claude Desktop / Cursor).
 
-> The complete 14-tool reference, agent playbook, error conventions, and sequence diagram are in [`docs/MCP.md`](docs/MCP.md).
+> The complete 16-tool reference, agent playbook, error conventions, and sequence diagram are in [`docs/MCP.md`](docs/MCP.md).
 
 ### 9.1 Launch
 
@@ -479,7 +522,7 @@ The equivalent module form: `"command": ["python", "-m", "serialhub", "mcp", "--
 
 Environment variables: `SERIALHUB_URL` (daemon base, default `http://127.0.0.1:8765`), `SERIALHUB_TOKEN` (when the daemon sets a token).
 
-### 9.3 Tool cheat sheet (14)
+### 9.3 Tool cheat sheet (16)
 
 Every tool returns `{"ok": true, ...}` on success and `{"ok": false, "error": "..."}` on failure.
 
@@ -499,6 +542,8 @@ Every tool returns `{"ok": true, ...}` on success and `{"ok": false, "error": ".
 | `mark` | `port, label` | `seq`, `ts_ms` |
 | `clear` | `port` | `cleared` |
 | `reload` | - | `added`/`removed`/`restarted`/`updated` |
+| `set_device` | `port, device=None, match=None, reopen=True` | port dict (remapped `device` / `open`); transient, not persisted |
+| `discover` | - | `devices[]` (`{index, device, description, hwid, vid, pid}`) |
 
 Loopback demo:
 
@@ -608,7 +653,7 @@ python -m pytest -q
 # MCP protocol self-check (hand-written stdio JSON-RPC client, no daemon needed)
 python tools/mcp_smoke.py
 
-# End-to-end smoke (needs the daemon running): initialize + tools/list(14) + list_ports
+# End-to-end smoke (needs the daemon running): initialize + tools/list(16) + list_ports
 python -m serialhub serve --config examples/config.yaml   # in another terminal
 python tools/mcp_smoke.py --full --tool-timeout 30
 ```
@@ -631,7 +676,7 @@ following methodology (reproducible):
 | `export` | File truly written, `bytes`/`count` match |
 | TCP bridge round trip | A wire round trip TCP write → serial → TCP write-back succeeds |
 | CLI `list` / `read` | Single-line JSON envelope, exit code 0 |
-| MCP `initialize` + `tools/list` | Returns **14** tools |
+| MCP `initialize` + `tools/list` | Returns **16** tools |
 | MCP `send` + `wait_for` | Sentinel hit (`matched:true`) |
 
 Rerun with one command:

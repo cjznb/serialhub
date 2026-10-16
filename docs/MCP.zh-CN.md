@@ -3,8 +3,8 @@
 # serialhub MCP 使用说明
 
 本文件面向**要用 serialhub 操作串口的 AI agent**（以及为 agent 配置 MCP 的工程师）。
-它把常驻守护 `serialhub serve` 暴露为 **14 个 MCP 工具**，让 agent 直接以工具调用完成
-「列口 → 打开 → 等待/读取/搜索 → 发送 → 快照/导出/桥」的全流程。
+它把常驻守护 `serialhub serve` 暴露为 **16 个 MCP 工具**，让 agent 直接以工具调用完成
+「列口 → 打开 → 等待/读取/搜索 → 发送 → 快照/导出/桥」的全流程（另有运行时改写：`set_device` / `discover`）。
 
 > 契约来源：[`ARCHITECTURE.md`](ARCHITECTURE.md) §11；实现：[`../serialhub/mcp_server.py`](../serialhub/mcp_server.py)。
 > 主手册：[`../README.zh-CN.md`](../README.zh-CN.md)。
@@ -57,7 +57,7 @@ pip install "mcp>=1.9"               # MCP 支持（或 pip install -r requireme
 
 # 协议自检（自写 stdio JSON-RPC 客户端，不需要守护）
 python tools/mcp_smoke.py
-#   initialize + tools/list -> 应打印 14 个工具，末尾 "# RESULT: PASS"
+#   initialize + tools/list -> 应打印 16 个工具，末尾 "# RESULT: PASS"
 
 # 端到端冒烟（需先起守护）
 python -m serialhub serve --config examples/config.yaml
@@ -146,7 +146,7 @@ python tools/mcp_smoke.py --full --tool-timeout 30
 
 ---
 
-## 5. 工具参考（14 个）
+## 5. 工具参考（16 个）
 
 约定：下文「参数表」中的默认值即工具签名默认值；「返回」省略公共的 `ok` / `port` 字段。
 
@@ -495,6 +495,49 @@ python tools/mcp_smoke.py --full --tool-timeout 30
 
 ---
 
+### 5.15 `set_device`
+
+运行时改写某口用哪个 COM/设备，**无需**改配置文件、也不重启守护。改写是**临时的**（仅内存，不写入配置）。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `port` | str | 是 | | 逻辑口名 |
+| `device` | str | 否 | `null` | 固定设备路径（`COM11` / `/dev/ttyUSB0`） |
+| `match` | str \| dict | 否 | `null` | 自动发现规格：JSON 对象串（如 `'{"vid": "0x1A86", "pid": "0x7523"}'`）或 dict。键：`description`/`hwid`/`device`/`serial`（子串）、`vid`/`pid`（int 或十六进制）、`index` |
+| `reopen` | bool | 否 | `true` | 立即重启 worker（缓冲保留）。为 `false` 时只改内存映射，于下次 open/重连生效 |
+
+必须且只能给出 `device` / `match` 之一；两者都给或都不给都报错。`device` 设为固定路径（并清空 `match`）；
+`match` 清空 `device`，交由 worker 在每次 open/重连时重新解析真实设备。
+
+返回：端口 dict（与 `open` 同形，含 `device` / `open` / `buffer`）。
+
+```json
+{"ok":true,"name":"console","device":"COM12","open":true,"baud":115200,"buffer":{"count":9,"bytes":210,"first_seq":1,"last_seq":9,"dropped_total":0},"tcp_bridge":null}
+```
+
+**何时用**：守护在跑、目标换到了新的 COM；不重启就把某个逻辑口改指到别的适配器。要**持久化**映射，
+请改配置后调用 `reload`。
+
+---
+
+### 5.16 `discover`
+
+枚举系统串口设备，带序号、按设备名排序（即 `match` 解析所依据的池子）。
+
+| 参数 | 类型 | 必填 |
+|---|---|---|
+| （无） | | |
+
+返回：`{devices: [{index, device, description, hwid, vid, pid}...]}`。
+
+```json
+{"ok":true,"devices":[{"index":0,"device":"COM11","description":"USB-SERIAL CH343","hwid":"USB VID:PID=1A86:55D3","vid":6790,"pid":21971},{"index":1,"device":"COM12","description":"USB-SERIAL CH340","hwid":"USB VID:PID=1A86:7523","vid":6790,"pid":29987}]}
+```
+
+**何时用**：选 `match` 规格前（看有哪些 description / VID:PID），或找回拔插后当前的 COM。
+
+---
+
 ## 6. Agent 操作手册（playbook）
 
 ### 6.1 游标增量（不重复消费）
@@ -651,6 +694,8 @@ MCP 的每个工具都对应 CLI 子命令 / REST 端点，便于交叉验证：
 | `mark` | `mark` | `POST /api/ports/{n}/mark` |
 | `clear` | `clear` | `POST /api/ports/{n}/clear` |
 | `reload` | `reload` | `POST /api/reload` |
+| `set_device` | `set-device` | `POST /api/ports/{n}/device` |
+| `discover` | `discover` | `GET /api/devices` |
 
 差异提示：MCP `read` **没有** `kinds` 参数（REST/CLI 有）；需要按 kind 过滤时走 REST/CLI，
 或用 MCP `read` 的 `filter` 正则近似。

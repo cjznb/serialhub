@@ -30,6 +30,7 @@
 | 能力 | 说明 |
 |---|---|
 | 常驻多口 | 每口一个读线程，持久打开、断线按指数退避重连（**旧缓冲不丢**） |
+| 自动发现 | 某口可用 `match` 规格替代固定 `device`；**打开时解析、每次重连前重新解析**，故拔插后换到别的 COM 仍能找回 |
 | 环形缓冲 | 每口按**行数 + 字节**双阈值淘汰最老行；默认 20000 行 / 8 MiB |
 | 全局序号 | `seq` 跨所有口单调递增、线程安全；`ts_ms` 为接收时刻 epoch 毫秒 |
 | 逐行类型 | `kind ∈ {rx, tx, mark}`：收到 / 本进程发出（回显）/ 标记 |
@@ -41,7 +42,7 @@
 | Web UI | 深/浅色、多标签、ANSI 彩色、时间戳/序号、过滤/搜索、暂停/清屏、导出、发送栏 |
 | TCP 桥 | server（监听，客户端写=下发串口）/ client（连远端透传） |
 | CLI | 每个子命令输出**单行 JSON** `{"ok":true,"data":{...}}`，退出码 0/1 |
-| MCP | 14 个工具（stdio），让 agent 直接以工具调用操作串口 |
+| MCP | 16 个工具（stdio），让 agent 直接以工具调用操作串口 |
 | 热重载 | 改配置后 `serialhub reload`，增删口 / 改参数 / 重建缓冲即时生效 |
 | 无硬件演示 | `device: loop://` 直接空跑 open→send→read→wait_for |
 
@@ -54,7 +55,7 @@ serialhub/
 ├── README.md                 # 本文件（用户手册）
 ├── docs/
 │   ├── ARCHITECTURE.md        # 冻结契约（唯一事实来源）
-│   └── MCP.md                 # MCP 使用说明（14 工具参考 + agent 手册）
+│   └── MCP.md                 # MCP 使用说明（16 工具参考 + agent 手册）
 ├── examples/
 │   ├── config.yaml            # loop:// 演示 + 带注释的真实口
 │   ├── mcp_client.py          # 可运行的编程式客户端示例
@@ -68,7 +69,7 @@ serialhub/
 │   ├── __main__.py            # python -m serialhub 入口
 │   ├── cli.py                 # 命令行（serve/list/open/read/wait/send/bridge/mcp/...）
 │   ├── client.py              # HTTP 瘦客户端（stdlib，CLI/MCP 共用）
-│   ├── mcp_server.py          # MCP 14 工具（stdio）
+│   ├── mcp_server.py          # MCP 16 工具（stdio）
 │   ├── mcp_compat.py          # mcp 1.x/2.x 兼容垫片
 │   ├── server.py              # FastAPI + REST + WS + 静态 UI
 │   ├── hub.py                 # 中枢（端口/缓冲/广播/桥/等待）
@@ -77,6 +78,7 @@ serialhub/
 │   ├── tcp_bridge.py          # TCP 桥
 │   ├── exporter.py            # 导出格式化
 │   ├── config.py              # 配置模型/加载/校验
+│   ├── discovery.py           # 端口自动发现（match 规格 -> 真实设备名）
 │   ├── models.py              # Line / ANSI / EOL / now_ms
 │   └── static/                # Web UI（index.html + app.js + style.css）
 ├── tests/                     # 单元/集成测试
@@ -194,14 +196,46 @@ python -m serialhub serve --config config.example.yaml --no-autostart
 
 ### 5.3 `ports[]`（端口列表）
 
-每项至少含 `name`（唯一非空）与 `device`；其余键与 `defaults` 同名，逐项覆盖。另有：
+每项含 `name`（唯一非空），且**要么**含固定 `device`，**要么**含自动发现 `match`；其余键与 `defaults` 同名，逐项覆盖。另有：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `name` | str | 逻辑口名（`list`/`open`/`read` 都用它） |
-| `device` | str | `COMx` / `/dev/ttyUSB0` / pyserial URL：`loop://`、`socket://host:port`、`rfc2217://...` |
+| `device` | str | 固定设备：`COMx` / `/dev/ttyUSB0` / pyserial URL（`loop://`、`socket://host:port`、`rfc2217://...`）。`device` 与 `match` 同时给出时，固定值优先 |
+| `match` | dict\|null | 自动发现规格（`device` 为空时使用）。见 §5.3.1 |
 | `description` | str | 可选备注（自由文本）。透传到 `list_ports`/`status`/Web UI，便于辨识设备（如 `ESP32C6`） |
 | `tcp_bridge` | dict\|null | 可选：`{mode: server\|client, port: <int>, host: <str\|null>}`，守护启动时自动起桥 |
+
+#### 5.3.1 `match`（端口自动发现）
+
+某口可不写固定 `device`，改给一份 `match` 规格。守护在**打开时**把它解析成当前真实设备名（如 `COM12`），
+并在**每次重连前重新解析**，故设备拔插后换到别的 COM 仍能被找回；解析出的 COM 会写回，因此
+`list` / `status` / Web UI 都能看到。某口一个都没匹配到时，会显示 `last_error: no device matched: ...`
+并持续重试。
+
+| `match` 键 | 类型 | 语义 |
+|---|---|---|
+| `description` | str | 对端口描述做不区分大小写的**子串**匹配 |
+| `hwid` | str | 对 `hwid` 做不区分大小写**子串**匹配 |
+| `device` | str | 对设备名做不区分大小写**子串**匹配（如 `"COM"`） |
+| `serial` | str | 对序列号做不区分大小写**子串**匹配 |
+| `vid` | int\|str | **精确**匹配 USB 厂商号；int 或十六进制串（`0x1A86` / `"0x1A86"` / `46230`） |
+| `pid` | int\|str | **精确**匹配 USB 产品号（形式同 `vid`） |
+| `index` | int | 多个候选同分时取（按设备名排序）第 N 个；默认 `0` |
+
+所有键均可选、按“与”关系组合；未知键会被拒绝。[`examples/config.yaml`](examples/config.yaml) 中的真实写法：
+
+```yaml
+ports:
+  - name: c6
+    match: { description: "CH343" }   # ESP32C6（CH343）
+  - name: stm32
+    match: { description: "CH340" }   # STM32H750（CH340）
+  # 等价写法： match: { vid: 0x1A86, pid: 0x7523 }
+```
+
+要在运行时把某口改指到别的设备而不改配置，用 `set-device`（§7.1、§9.3）或
+`open NAME --device COMx`；该改写是**临时的**（见 §7.1）。
 
 ### 5.4 `logging` / `ui`
 
@@ -241,8 +275,10 @@ ui:
 ```
 
 校验规则（加载即校验，非法抛 `ValueError` 且消息含字段路径如 `ports[console].data_bits`）：
-`name` 唯一非空、`device` 非空、`data_bits∈{5,6,7,8}`、`parity∈{N,E,O,M,S}`、
-`stop_bits∈{1,1.5,2}`、`flow∈{none,rtscts,xonxoff,dsrdtr}`、`buffer_lines>0`、`buffer_bytes>0`。
+`name` 唯一非空、非空 `device` **或** `match` 规格、`data_bits∈{5,6,7,8}`、`parity∈{N,E,O,M,S}`、
+`stop_bits∈{1,1.5,2}`、`flow∈{none,rtscts,xonxoff,dsrdtr}`、`buffer_lines>0`、`buffer_bytes>0`。`match` 规格
+只接受 §5.3.1 的键；未知键、非字符串的 `description`/`hwid`/`device`/`serial`、非法的 `vid`/`pid`、
+负的 `index` 均报错。
 
 ---
 
@@ -271,6 +307,8 @@ ui:
 
 > UI 通过 `/api/*` 与 `/ws` 工作；WS 首帧推 `hello`（端口概览），随后推 `line` / `status` / `mark` 事件。
 
+> **Language / 语言**：Web UI 提供 `EN | 中文` 切换（选择会持久化）。后端消息依据 `SERIALHUB_LANG` 环境变量，否则依据 HTTP `Accept-Language` 头。新增语言的方法见 [`docs/I18N.md`](docs/I18N.md)。
+
 ---
 
 ## 7. CLI 用法
@@ -292,8 +330,10 @@ CLI 是**瘦客户端**：除 `serve` / `mcp` 外，每个子命令打印**恰�
 |---|---|---|---|
 | `serve` | `--config F` `[--host]` `[--port]` `[--no-autostart]` `[--log-level]` | (本地) | 运行守护（不打印 JSON） |
 | `list`（别名 `ports`） | — | `GET /api/ports` | 列系统串口 + 已配置端口 |
+| `discover` | — | `GET /api/devices` | 枚举系统串口设备（带序号，按设备名排序） |
 | `status` | `[NAME]` | `GET /api/status` | 整体或单口状态 |
-| `open` | `NAME` `[--baud]` `[--device]` | `POST /api/ports/{n}/open` | 打开（可覆盖波特率/设备） |
+| `open` | `NAME` `[--baud]` `[--device]` | `POST /api/ports/{n}/open` | 打开（可覆盖波特率/设备；`--device` 同时是一次临时 remap） |
+| `set-device` | `NAME` `[--device COMx]` `[--match SPEC]` `[--no-reopen]` | `POST /api/ports/{n}/device` | 运行时改写某口用哪个设备（**临时**，见下） |
 | `close` | `NAME` | `POST /api/ports/{n}/close` | 关闭（保留缓冲） |
 | `read` | `NAME` `[--since-seq]` `[--since-ts]` `[--filter]` `[--limit]` `[--strip-ansi]` `[--kinds]` | `GET .../read` | 增量读缓冲行 |
 | `search` | `NAME REGEX` `[--context]` `[--since-seq]` `[--limit]` | `GET .../search` | 正则搜索（可带上下文） |
@@ -313,6 +353,8 @@ CLI 是**瘦客户端**：除 `serve` / `mcp` 外，每个子命令打印**恰�
 - `search` 的 `regex` 与 `read` 的 `--filter` 不同名（前者定位命中、支持上下文，后者只筛选）。
 - `send` 的 `DATA` 传 `-` 时从 stdin 读（去掉一个尾随换行）；`--eol` 接受 `crlf|lf|cr|none` 或转义字面量，缺省取该口 `eol`。
 - `wait` / `send` 的超时单位是**毫秒**（`--timeout-ms`）。
+- `set-device` 必须且只能给出 `--device` / `--match` 之一；`--match` 接受 JSON 对象（`'{"vid":0x1A86,"pid":0x7523}'`）或紧凑 `k=v` 对（`description=CH340,vid=0x1A86`）。`--no-reopen` 只改内存映射（下次 open/重连生效）；默认立即重开该口（缓冲保留）。
+- **运行时 remap 是临时的**：`set-device`（以及 `open --device`）只改内存映射，**不写入配置文件**。要持久化，请改配置后 `reload`。
 
 ### 7.2 常用示例
 
@@ -411,7 +453,7 @@ nc 127.0.0.1 4001
 MCP 服务器让 agent **以工具调用**（而非 shell）操作串口。它是**瘦客户端**：每个工具都通过 HTTP
 调用常驻守护，所以**必须先 `serve`**。transport 为 **stdio**（opencode / Claude Desktop / Cursor 的通用本地方式）。
 
-> 完整的 14 工具逐项参考、agent 操作手册、错误约定与序列图见 [`docs/MCP.zh-CN.md`](docs/MCP.zh-CN.md)。
+> 完整的 16 工具逐项参考、agent 操作手册、错误约定与序列图见 [`docs/MCP.zh-CN.md`](docs/MCP.zh-CN.md)。
 
 ### 9.1 启动
 
@@ -473,7 +515,7 @@ python -m serialhub mcp --transport stdio
 
 环境变量：`SERIALHUB_URL`（守护基址，默认 `http://127.0.0.1:8765`）、`SERIALHUB_TOKEN`（守护设了 token 时）。
 
-### 9.3 工具速查表（14 个）
+### 9.3 工具速查表（16 个）
 
 所有工具成功返回 `{"ok": true, ...}`，失败返回 `{"ok": false, "error": "..."}`。
 
@@ -493,6 +535,8 @@ python -m serialhub mcp --transport stdio
 | `mark` | `port, label` | `seq`, `ts_ms` |
 | `clear` | `port` | `cleared` |
 | `reload` | — | `added`/`removed`/`restarted`/`updated` |
+| `set_device` | `port, device=None, match=None, reopen=True` | 端口 dict（改后的 `device` / `open`）；临时，不落盘 |
+| `discover` | — | `devices[]`（`{index, device, description, hwid, vid, pid}`） |
 
 回环演示：
 
@@ -597,7 +641,7 @@ python -m pytest -q
 # MCP 协议自检（自写 stdio JSON-RPC 客户端，不需要守护）
 python tools/mcp_smoke.py
 
-# 端到端冒烟（需要守护在跑）：initialize + tools/list(14) + list_ports
+# 端到端冒烟（需要守护在跑）：initialize + tools/list(16) + list_ports
 python -m serialhub serve --config examples/config.yaml   # 另一个终端
 python tools/mcp_smoke.py --full --tool-timeout 30
 ```
@@ -619,7 +663,7 @@ python tools/mcp_smoke.py --full --tool-timeout 30
 | `export` | 文件真实写出，`bytes`/`count` 一致 |
 | TCP 桥往返 | 经 TCP 写→串口→回写 TCP 的线上往返成功 |
 | CLI `list` / `read` | 单行 JSON envelope，退出码 0 |
-| MCP `initialize` + `tools/list` | 返回 **14** 个工具 |
+| MCP `initialize` + `tools/list` | 返回 **16** 个工具 |
 | MCP `send` + `wait_for` | 哨兵命中（`matched:true`） |
 
 一键复跑：

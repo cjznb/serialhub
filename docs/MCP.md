@@ -3,9 +3,9 @@
 # serialhub MCP guide
 
 This document is for **AI agents that operate serial ports with serialhub** (and for engineers configuring
-MCP for those agents). It exposes the persistent `serialhub serve` daemon as **14 MCP tools**, letting an
+MCP for those agents). It exposes the persistent `serialhub serve` daemon as **16 MCP tools**, letting an
 agent complete the whole flow of "list ports → open → wait/read/search → send → snapshot/export/bridge"
-through tool calls.
+through tool calls (plus runtime remap: `set_device` / `discover`).
 
 > Contract source: [`ARCHITECTURE.md`](ARCHITECTURE.md) §11; implementation: [`../serialhub/mcp_server.py`](../serialhub/mcp_server.py).
 > Main manual: [`../README.md`](../README.md).
@@ -58,7 +58,7 @@ pip install "mcp>=1.9"               # MCP support (or pip install -r requiremen
 
 # Protocol self-check (hand-written stdio JSON-RPC client, no daemon needed)
 python tools/mcp_smoke.py
-#   initialize + tools/list -> should print 14 tools and end with "# RESULT: PASS"
+#   initialize + tools/list -> should print 16 tools and end with "# RESULT: PASS"
 
 # End-to-end smoke (needs the daemon running)
 python -m serialhub serve --config examples/config.yaml
@@ -147,7 +147,7 @@ The equivalent module form (needs `import serialhub` to work, e.g. after `pip in
 
 ---
 
-## 5. Tool reference (14)
+## 5. Tool reference (16)
 
 Convention: the defaults in the "Args" tables below are the tool-signature defaults; "Returns" omits the
 common `ok` / `port` fields.
@@ -501,6 +501,52 @@ to a buffer ceiling rebuilds the buffer while **keeping the existing lines**.
 
 ---
 
+### 5.15 `set_device`
+
+Remap which COM/device a configured port uses at runtime, **without** editing the config file or restarting the
+daemon. The change is **transient** (in-memory only; nothing is written to the config).
+
+| Args | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `port` | str | yes | | Logical port name |
+| `device` | str | no | `null` | Fixed device path (`COM11` / `/dev/ttyUSB0`) |
+| `match` | str \| dict | no | `null` | Auto-discovery spec: a JSON object string (e.g. `'{"vid": "0x1A86", "pid": "0x7523"}'`) or a dict. Keys: `description`/`hwid`/`device`/`serial` (substring), `vid`/`pid` (int or hex), `index` |
+| `reopen` | bool | no | `true` | Restart the worker now (buffer preserved). When `false`, only the in-memory mapping changes; it applies on the next open/reconnect |
+
+Provide **exactly one** of `device` / `match`; giving both or neither is an error. `device` sets a fixed path
+(and clears `match`); `match` clears `device` and lets the worker re-resolve the real device on each
+open/reconnect.
+
+Returns: the port dict (same shape as `open`, including `device` / `open` / `buffer`).
+
+```json
+{"ok":true,"name":"console","device":"COM12","open":true,"baud":115200,"buffer":{"count":9,"bytes":210,"first_seq":1,"last_seq":9,"dropped_total":0},"tcp_bridge":null}
+```
+
+**When to use**: the daemon is running and the target moved to a new COM; repoint an existing logical port at a
+different adapter without a restart. To **persist** a mapping, edit the config and call `reload` instead.
+
+---
+
+### 5.16 `discover`
+
+Enumerate the system serial devices, indexed and sorted by device name (the pool that `match` resolves against).
+
+| Args | Type | Required |
+|---|---|---|
+| (none) | | |
+
+Returns: `{devices: [{index, device, description, hwid, vid, pid}...]}`.
+
+```json
+{"ok":true,"devices":[{"index":0,"device":"COM11","description":"USB-SERIAL CH343","hwid":"USB VID:PID=1A86:55D3","vid":6790,"pid":21971},{"index":1,"device":"COM12","description":"USB-SERIAL CH340","hwid":"USB VID:PID=1A86:7523","vid":6790,"pid":29987}]}
+```
+
+**When to use**: before choosing a `match` spec (see which descriptions / VID:PIDs are present), or to find the
+current COM of a replugged adapter.
+
+---
+
 ## 6. Agent playbook
 
 ### 6.1 Cursor increments (no double consumption)
@@ -662,6 +708,8 @@ Every MCP tool maps to a CLI subcommand / REST endpoint, making cross-verificati
 | `mark` | `mark` | `POST /api/ports/{n}/mark` |
 | `clear` | `clear` | `POST /api/ports/{n}/clear` |
 | `reload` | `reload` | `POST /api/reload` |
+| `set_device` | `set-device` | `POST /api/ports/{n}/device` |
+| `discover` | `discover` | `GET /api/devices` |
 
 Difference note: MCP `read` has **no** `kinds` argument (REST/CLI do); when you need to filter by kind, go through
 REST/CLI, or approximate it with MCP `read`'s `filter` regex.
