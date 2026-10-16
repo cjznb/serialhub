@@ -41,7 +41,7 @@ Homepage = "https://github.com/cjznb/stm32h750-smart-home-terminal"
 include = ["serialhub*"]
 
 [tool.setuptools.package-data]
-serialhub = ["static/*", "static/vendor/*"]
+serialhub = ["static/*", "static/vendor/*", "static/i18n/*", "i18n/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
