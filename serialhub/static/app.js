@@ -60,169 +60,30 @@ function safeSet(key, val) {
 }
 
 /* 1b. i18n ================================================================ */
-/* Dependency-free dictionary + t(key, vars) with {var} interpolation.
-   Fallback chain: active lang -> en -> key itself. */
-const I18N = {
-  en: {
-    docTitle: "serialhub · serial console",
-    brandSub: "persistent serial hub",
-    statsAria: "server stats",
-    statPorts: "ports",
-    statOpen: "open",
-    statUptime: "uptime",
-    connIdle: "idle",
-    connConnecting: "connecting\u2026",
-    connLive: "live",
-    connError: "disconnected",
-    connReconnecting: "reconnecting\u2026",
-    connUnauthorized: "unauthorized",
-    tokenLabel: "token",
-    tokenTitle: "Bearer token \u2014 set if the server requires auth",
-    tokenPlaceholder: "optional",
-    langAria: "Language",
-    themeTitle: "Toggle light / dark theme",
-    themeAria: "Toggle theme",
-    tabsAria: "serial ports",
-    bannerStrong: "xterm.js could not be loaded.",
-    bannerText: " Running in degraded mode: output is shown as plain text with ANSI color codes stripped. Check your connection, then reload.",
-    pauseTitle: "Pause / resume live rendering",
-    pause: "Pause",
-    resume: "Resume",
-    autoTitle: "Toggle autoscroll to newest line",
-    autoLabel: "Autoscroll",
-    tsTitle: "Toggle per-line timestamp",
-    tsLabel: "Time",
-    clearTitle: "Clear the local view",
-    clearLabel: "Clear",
-    filterTitle: "Client-side regex filter over incoming lines",
-    filterLabel: "filter",
-    filterPlaceholder: "regex, e.g. error|warn",
-    searchTitle: "Search retained lines \u2014 Enter to run, then jump between hits",
-    searchLabel: "search",
-    searchPlaceholder: "regex",
-    prevTitle: "Previous hit",
-    nextTitle: "Next hit",
-    histTitle: "Search full server history",
-    histLabel: "hist",
-    exportGroupTitle: "Export this port's buffer (server-side)",
-    exportRaw: "raw",
-    exportNoansi: "noansi",
-    exportJson: "json",
-    sendPortTitle: "Target port",
-    sendPortAria: "Target port",
-    sendPlaceholder: "type a command to send\u2026  (Enter to send \u00b7 Up/Down for history)",
-    eolTitle: "Line ending appended on send",
-    eolAria: "Line ending",
-    eolCrlf: "EOL: CRLF",
-    eolLf: "EOL: LF",
-    eolCr: "EOL: CR",
-    eolNone: "EOL: none",
-    send: "Send",
-    state_closed: "closed",
-    state_open: "open",
-    state_reconnecting: "reconnecting",
-    state_error: "error",
-    rateLines: "lines/s",
-    rateBytes: "B/s",
-    buffer: "buffer",
-    bufHint: "{n} lines / {bytes}",
-    markLine: "\u2500\u2500 mark: {label} \u2500\u2500",
-    toastDismiss: "Dismiss",
-    toastNetworkError: "Network error: {msg}",
-    toastUnauthorized: "Unauthorized \u2014 set the token in the top bar.",
-    toastWsUnauthorized: "WebSocket unauthorized \u2014 set the token in the top bar.",
-    toastWsError: "WebSocket error: {msg}",
-    toastTokenUpdated: "Token updated \u2014 reconnecting.",
-    toastResumed: "Resumed.",
-    toastPaused: "Paused \u2014 new lines are buffered.",
-    toastExported: "Exported {n} lines ({fmt}) \u2192 {file}",
-    toastNoMatches: "No matches in server history.",
-    toastOutsideBuffer: "Line #{seq} is outside the local buffer.",
-    copied: "Copied {n} chars",
-  },
-  zh: {
-    docTitle: "serialhub · 串口控制台",
-    brandSub: "常驻串口中枢",
-    statsAria: "服务端统计",
-    statPorts: "端口",
-    statOpen: "已开",
-    statUptime: "运行时长",
-    connIdle: "空闲",
-    connConnecting: "连接中\u2026",
-    connLive: "已连接",
-    connError: "已断开",
-    connReconnecting: "重连中\u2026",
-    connUnauthorized: "未授权",
-    tokenLabel: "令牌",
-    tokenTitle: "Bearer 令牌 \u2014 服务端要求鉴权时填写",
-    tokenPlaceholder: "可选",
-    langAria: "语言",
-    themeTitle: "切换浅色 / 深色主题",
-    themeAria: "切换主题",
-    tabsAria: "串口",
-    bannerStrong: "xterm.js 加载失败。",
-    bannerText: " 已进入降级模式：输出以纯文本显示，ANSI 颜色码被去除。请检查网络后重新加载。",
-    pauseTitle: "暂停 / 恢复实时渲染",
-    pause: "暂停",
-    resume: "继续",
-    autoTitle: "自动滚动到最新行",
-    autoLabel: "自动滚动",
-    tsTitle: "每行时间戳开关",
-    tsLabel: "时间戳",
-    clearTitle: "清空本地视图",
-    clearLabel: "清屏",
-    filterTitle: "对进入的行做客户端正则过滤",
-    filterLabel: "过滤",
-    filterPlaceholder: "正则，如 error|warn",
-    searchTitle: "搜索已保留的行 \u2014 回车执行，然后在各命中间跳转",
-    searchLabel: "搜索",
-    searchPlaceholder: "正则",
-    prevTitle: "上一个命中",
-    nextTitle: "下一个命中",
-    histTitle: "搜索服务端全历史",
-    histLabel: "全历史",
-    exportGroupTitle: "导出该口缓冲（服务端）",
-    exportRaw: "原样",
-    exportNoansi: "纯文本",
-    exportJson: "json",
-    sendPortTitle: "目标端口",
-    sendPortAria: "目标端口",
-    sendPlaceholder: "输入要发送的命令\u2026（回车发送 \u00b7 ↑/↓ 翻阅历史）",
-    eolTitle: "发送时追加的行结束符",
-    eolAria: "行结束符",
-    eolCrlf: "结束符: CRLF",
-    eolLf: "结束符: LF",
-    eolCr: "结束符: CR",
-    eolNone: "结束符: 无",
-    send: "发送",
-    state_closed: "已关闭",
-    state_open: "已连接",
-    state_reconnecting: "重连中",
-    state_error: "错误",
-    rateLines: "线/秒",
-    rateBytes: "字节/秒",
-    buffer: "缓冲",
-    bufHint: "{n} 行 / {bytes}",
-    markLine: "\u2500\u2500 标记: {label} \u2500\u2500",
-    toastDismiss: "关闭",
-    toastNetworkError: "网络错误：{msg}",
-    toastUnauthorized: "未授权 \u2014 请在顶栏填写令牌。",
-    toastWsUnauthorized: "WebSocket 未授权 \u2014 请在顶栏填写令牌。",
-    toastWsError: "WebSocket 错误：{msg}",
-    toastTokenUpdated: "令牌已更新 \u2014 正在重连。",
-    toastResumed: "已继续。",
-    toastPaused: "已暂停 \u2014 新行将进入缓冲。",
-    toastExported: "已导出 {n} 行（{fmt}）\u2192 {file}",
-    toastNoMatches: "服务端历史中无匹配。",
-    toastOutsideBuffer: "第 #{seq} 行不在本地缓冲内。",
-    copied: "已复制 {n} 字符",
-  },
+/* Locale dictionaries live in static/i18n/<code>.js and self-register with
+   window.SERIALHUB_I18N (defined inline in index.html). app.js holds no
+   dictionary of its own: the active dictionary is derived from that registry,
+   so adding a language = one new file + one <script> line in index.html.
+   Fallback chain for t(key, vars): active locale -> en -> the key itself. */
+const i18nRegistry = window.SERIALHUB_I18N || {
+  _d: {}, _meta: {},
+  register() {},
+  has() { return false; },
+  langs() { return []; },
+  meta() { return {}; },
+  dict() { return {}; },
 };
 
+/* Dictionary for `lang`, or the `en` baseline when it is missing or empty. */
+function dictFor(lang) {
+  const d = i18nRegistry.dict(lang);
+  return (d && Object.keys(d).length) ? d : i18nRegistry.dict("en");
+}
+
 function t(key, vars) {
-  const dict = I18N[state.lang] || I18N.en;
+  const dict = dictFor(state.lang);
   let s = dict[key];
-  if (s == null) s = I18N.en[key];
+  if (s == null) s = i18nRegistry.dict("en")[key];
   if (s == null) s = key;
   if (vars) {
     s = s.replace(/\{(\w+)\}/g, (m, k) => (vars[k] == null ? m : String(vars[k])));
@@ -230,9 +91,11 @@ function t(key, vars) {
   return s;
 }
 
+/* stored -> browser prefers zh -> 'zh' -> else 'en'; a stored value that is no
+   longer registered (e.g. its locale file was removed) is ignored. */
 function detectLang() {
   const saved = safeGet("serialhub.lang", "");
-  if (saved === "en" || saved === "zh") return saved;
+  if (saved && i18nRegistry.has(saved)) return saved;
   const list = (navigator.languages && navigator.languages.length)
     ? navigator.languages : [navigator.language || "en"];
   return String(list[0] || "").toLowerCase().startsWith("zh") ? "zh" : "en";
@@ -377,11 +240,30 @@ function updateLangSwitcher() {
     b.setAttribute("aria-pressed", String(on));
   });
 }
+/* Build one segmented-control button per REGISTERED locale, so dropping a new
+   static/i18n/<code>.js file adds its button automatically. */
+function buildLangSwitcher() {
+  const host = $("#langSwitch");
+  if (!host) return;
+  host.innerHTML = "";
+  i18nRegistry.langs().forEach((code) => {
+    const meta = i18nRegistry.meta(code);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "lang-btn";
+    btn.dataset.lang = code;
+    btn.textContent = meta.label || code.toUpperCase();
+    if (meta.name) btn.title = meta.name;
+    btn.addEventListener("click", () => applyLang(code));
+    host.appendChild(btn);
+  });
+}
 function applyLang(lang) {
-  if (lang !== "en" && lang !== "zh") lang = "en";
+  if (!i18nRegistry.has(lang)) lang = i18nRegistry.has("en") ? "en" : (i18nRegistry.langs()[0] || "en");
   state.lang = lang;
   safeSet("serialhub.lang", lang);
-  document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+  const meta = i18nRegistry.meta(lang);
+  document.documentElement.lang = meta.htmlLang || lang;
   document.title = t("docTitle");
   applyI18n(document);
   refreshPauseBtn();
@@ -1017,7 +899,8 @@ state.portConfig = function (name) {
 
 function bindUI() {
   $("#themeToggle").addEventListener("click", () => applyTheme(state.theme === "dark" ? "light" : "dark"));
-  $$(".lang-btn").forEach((b) => b.addEventListener("click", () => applyLang(b.dataset.lang)));
+  // language buttons are created (with their own click handlers) by
+  // buildLangSwitcher() from the registry — nothing to bind here.
 
   const tokenInput = $("#tokenInput");
   tokenInput.value = state.token;
@@ -1128,6 +1011,7 @@ async function init() {
   if (window.__fitReady) { try { await window.__fitReady; } catch (_e) { /* ignore */ } }
 
   initTheme();
+  buildLangSwitcher();
   applyLang(state.lang);
   detectFallback();
   $("#btnAuto").classList.toggle("on", state.autoscroll);

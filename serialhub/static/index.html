@@ -46,10 +46,10 @@
           <input id="tokenInput" type="password" autocomplete="off" spellcheck="false"
                  data-i18n-ph="tokenPlaceholder" placeholder="optional" />
         </label>
-        <div class="lang-switch" role="group" data-i18n-aria="langAria" aria-label="Language">
-          <button type="button" class="lang-btn" data-lang="en">EN</button>
-          <button type="button" class="lang-btn" data-lang="zh">中文</button>
-        </div>
+        <!-- Language switcher: buttons are generated from the locale registry
+             (window.SERIALHUB_I18N) by app.js — adding a locale file auto-adds
+             its button. The container stays empty in the static HTML. -->
+        <div class="lang-switch" id="langSwitch" role="group" data-i18n-aria="langAria" aria-label="Language"></div>
         <button class="icon-btn" id="themeToggle" data-i18n-title="themeTitle" data-i18n-aria="themeAria"
                 title="Toggle light / dark theme" aria-label="Toggle theme">&#9686;</button>
       </div>
@@ -179,6 +179,23 @@
     ], "__fitFailed");
   })();
   </script>
+
+  <!-- i18n registry: a pluggable, file-per-locale design. Each locale file calls
+       SERIALHUB_I18N.register(code, dict, meta) to add itself; the switcher and
+       the active dictionary are both derived from this registry at runtime, so a
+       new language is one extra <script> line here (en.js is the fallback). -->
+  <script>
+  window.SERIALHUB_I18N = window.SERIALHUB_I18N || {
+    _d: {}, _meta: {},
+    register: function(code, dict, meta){ this._d[code] = dict; this._meta[code] = meta || {}; },
+    has: function(code){ return !!this._d[code]; },
+    langs: function(){ return Object.keys(this._d); },
+    meta: function(code){ return this._meta[code] || {}; },
+    dict: function(code){ return this._d[code] || {}; }
+  };
+  </script>
+  <script src="/static/i18n/en.js"></script>
+  <script src="/static/i18n/zh.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
