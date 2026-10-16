@@ -136,6 +136,45 @@
           <span class="port-name"></span>
           <span class="port-meta"></span>
         </div>
+        <!-- device chip (resolved COM + user note) + runtime change-device popover.
+             The button is the popover trigger (aria-expanded/aria-controls wired in
+             app.js); the chip mirrors the current device and shows an "auto" tag
+             when the port is match-driven. -->
+        <div class="port-dev">
+          <span class="dev-chip" data-dev-chip>
+            <span class="dev-name">&#8211;</span>
+            <span class="dev-desc"></span>
+            <span class="dev-auto" hidden data-i18n="device.auto">auto</span>
+          </span>
+          <button class="dev-btn" type="button" data-dev-open
+                  aria-expanded="false" data-i18n-title="device.change" data-i18n-aria="device.change"
+                  title="Change device" aria-label="Change device">
+            <span class="bx" aria-hidden="true">&#8646;</span>
+            <span data-i18n="device.change">Change device</span>
+          </button>
+          <div class="dev-pop" data-dev-pop hidden role="dialog" data-i18n-aria="device.title" aria-label="Device">
+            <div class="dev-pop-head">
+              <span class="dev-pop-title" data-i18n="device.title">Device</span>
+              <button class="dev-refresh" type="button" data-dev-refresh
+                      data-i18n-title="device.refreshTitle" data-i18n-aria="device.refresh"
+                      title="Re-scan serial ports" aria-label="Refresh">
+                <span class="bx" aria-hidden="true">&#8635;</span><span data-i18n="device.refresh">Refresh</span>
+              </button>
+            </div>
+            <div class="dev-list" data-dev-list role="listbox" data-i18n-aria="device.listAria" aria-label="Discovered devices"></div>
+            <div class="dev-match">
+              <input class="dev-match-input" type="text" spellcheck="false" autocomplete="off"
+                     data-dev-match data-i18n-ph="device.match_ph" data-i18n-title="device.matchHint"
+                     data-i18n-aria="device.matchHint"
+                     placeholder="description=CH340" aria-label="match" />
+              <button class="dev-apply" type="button" data-dev-apply data-i18n="device.apply">Apply</button>
+            </div>
+            <label class="dev-map" data-i18n-title="device.mappingOnlyTitle" title="Update the mapping without reopening the port">
+              <input type="checkbox" data-dev-maponly />
+              <span data-i18n="device.mapping_only">mapping only (do not reopen)</span>
+            </label>
+          </div>
+        </div>
         <canvas class="spark" width="200" height="34" aria-hidden="true"></canvas>
         <div class="port-stats">
           <div class="mini rx"><b class="rate-lines">0</b><i data-i18n="rateLines">lines/s</i></div>

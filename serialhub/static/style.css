@@ -33,6 +33,8 @@
   --accent-soft:   rgba(232, 131, 74, 0.14);
   --accent-glow:   rgba(232, 131, 74, 0.28);
   --rx:            #4fd1b0;   /* mint */
+  --rx-soft:       rgba(79, 209, 176, 0.14);
+  --rx-line:       rgba(79, 209, 176, 0.38);
   --tx:            #e6b34a;   /* amber */
   --ok:            #4fd1b0;
   --warn:          #e6b34a;
@@ -79,6 +81,8 @@
   --accent-soft:   rgba(207, 90, 30, 0.12);
   --accent-glow:   rgba(207, 90, 30, 0.20);
   --rx:            #109c81;
+  --rx-soft:       rgba(16, 156, 129, 0.12);
+  --rx-line:       rgba(16, 156, 129, 0.36);
   --tx:            #a8790c;
   --ok:            #109c81;
   --warn:          #a8790c;
@@ -271,6 +275,8 @@ button { cursor: pointer; }
   padding: 10px 16px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
+  position: relative;
+  z-index: 2;
 }
 .port-id { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .port-name { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--text); }
@@ -295,6 +301,112 @@ button { cursor: pointer; }
 .mini i { font-style: normal; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-faint); }
 .mini.rx b { color: var(--rx); }
 .mini.tx b { color: var(--tx); }
+
+/* ---- per-port device chip + runtime change-device control ---------------- */
+.port-dev { position: relative; display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+
+.dev-chip {
+  display: inline-flex; align-items: baseline; gap: 7px;
+  max-width: 260px; min-height: 24px; padding: 3px 10px;
+  border: 1px solid var(--border-2); border-radius: 999px;
+  background: var(--surface);
+}
+.dev-chip .dev-name { font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: var(--accent-2); }
+.dev-chip .dev-desc {
+  font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dev-chip .dev-auto {
+  font-family: var(--mono); font-size: 9px; font-weight: 600;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--rx); background: var(--rx-soft);
+  border: 1px solid var(--rx-line); border-radius: 5px; padding: 0 4px;
+}
+
+.dev-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 10px;
+  border: 1px solid var(--border-2); border-radius: 999px;
+  background: var(--surface-2); color: var(--text-dim);
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.01em;
+  transition: all var(--speed) var(--ease);
+}
+.dev-btn:hover { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+.dev-btn[aria-expanded="true"] { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.dev-btn .bx { font-size: 12px; }
+
+.dev-pop {
+  position: absolute; top: calc(100% + 9px); left: 0; z-index: 60;
+  width: 340px; max-width: min(340px, 84vw);
+  display: flex; flex-direction: column;
+  padding: 11px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-2); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  animation: fade-in var(--speed) var(--ease);
+}
+.dev-pop[hidden] { display: none; }
+
+.dev-pop-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.dev-pop-title { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-faint); }
+.dev-refresh {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 9px;
+  border: 1px solid var(--border-2); border-radius: var(--radius-xs);
+  background: var(--surface-2); color: var(--text-dim);
+  font-family: var(--mono); font-size: 11px;
+  transition: all var(--speed) var(--ease);
+}
+.dev-refresh:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.dev-refresh .bx { font-size: 12px; }
+
+.dev-list {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 208px; overflow: auto;
+  padding: 2px; margin: 0 -2px;
+}
+.dev-row {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  padding: 6px 8px;
+  border: 1px solid transparent; border-radius: var(--radius-xs);
+  background: transparent; color: var(--text-dim);
+  font-family: var(--mono); font-size: 11.5px;
+  transition: background var(--speed) var(--ease), border-color var(--speed) var(--ease), color var(--speed) var(--ease);
+}
+.dev-row:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+.dev-row.is-current { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.dev-row .dr-dev { flex: 0 0 auto; font-weight: 600; color: var(--accent-2); }
+.dev-row .dr-desc { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-faint); }
+.dev-row .dr-cur { flex: 0 0 auto; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); }
+.dev-empty { padding: 10px 8px; text-align: center; font-family: var(--mono); font-size: 11.5px; color: var(--text-faint); }
+
+.dev-match { display: flex; align-items: center; gap: 6px; margin-top: 9px; }
+.dev-match-input {
+  flex: 1 1 auto; min-width: 0; height: 28px; padding: 0 9px;
+  border: 1px solid var(--border-2); border-radius: var(--radius-xs);
+  background: var(--surface-2); color: var(--text);
+  font-family: var(--mono); font-size: 11.5px;
+}
+.dev-match-input::placeholder { color: var(--text-faint); }
+.dev-match-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.dev-apply {
+  height: 28px; padding: 0 13px;
+  border: 1px solid var(--accent); border-radius: var(--radius-xs);
+  background: var(--accent); color: var(--bg);
+  font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+  transition: all var(--speed) var(--ease);
+}
+.dev-apply:hover { background: var(--accent-2); border-color: var(--accent-2); }
+
+.dev-map {
+  display: flex; align-items: center; gap: 7px; margin-top: 9px;
+  font-size: 11px; color: var(--text-dim); cursor: pointer; user-select: none;
+}
+.dev-map input { width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }
+
+.dev-pop.busy .dev-row,
+.dev-pop.busy .dev-apply,
+.dev-pop.busy .dev-refresh { opacity: 0.55; pointer-events: none; }
 
 /* terminal */
 .term-wrap { flex: 1 1 auto; position: relative; min-height: 0; padding: 8px 0 8px 12px; background: var(--bg); }
@@ -437,6 +549,9 @@ button { cursor: pointer; }
   .top-stats { order: 3; width: 100%; justify-content: space-between; gap: 8px; }
   .spark { display: none; }
   .port-meta { max-width: 34vw; }
+  .port-head { flex-wrap: wrap; gap: 10px 16px; }
+  .dev-chip { max-width: 60vw; }
+  .dev-chip .dev-desc { max-width: 30vw; }
   .token-field input { width: 84px; }
 }
 

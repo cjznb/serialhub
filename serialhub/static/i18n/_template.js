@@ -118,6 +118,23 @@
 //   toastNoMatches: "",
 //   toastOutsideBuffer: "",
 //   copied: "",
+//   "device.change": "",
+//   "device.title": "",
+//   "device.current": "",
+//   "device.auto": "",
+//   "device.refresh": "",
+//   "device.refreshTitle": "",
+//   "device.listAria": "",
+//   "device.match_ph": "",
+//   "device.matchHint": "",
+//   "device.apply": "",
+//   "device.mapping_only": "",
+//   "device.mappingOnlyTitle": "",
+//   "device.changed": "",
+//   "device.error": "",
+//   "device.match_invalid": "",
+//   "device.noDevices": "",
+//   "device.loadFailed": "",
 // }, { label: 'XX', htmlLang: 'xx', name: '' });
 
 /* A filled-in example (kept inert so shipping this template changes nothing):

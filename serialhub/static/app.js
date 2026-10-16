@@ -269,6 +269,7 @@ function applyLang(lang) {
   refreshPauseBtn();
   $("#connText").textContent = t(conn.key, conn.vars);
   state.runtimes.forEach((rt) => { applyI18n(rt.pane); updatePortHeader(rt); });
+  if (openDevPop && deviceCache) renderDeviceList(openDevPop.rt, deviceCache);
   updateLangSwitcher();
 }
 
@@ -301,9 +302,22 @@ function createRuntime(name) {
       bufPct: $(".buf-pct", tpl),
       termHost: $(".term-host", tpl),
       fallback: $(".log-fallback", tpl),
+      devChip: $(".dev-chip", tpl),
+      devName: $(".dev-name", tpl),
+      devDesc: $(".dev-desc", tpl),
+      devAuto: $(".dev-auto", tpl),
+      devBtn: $("[data-dev-open]", tpl),
+      devPop: $("[data-dev-pop]", tpl),
+      devList: $("[data-dev-list]", tpl),
+      devRefresh: $("[data-dev-refresh]", tpl),
+      devMatch: $("[data-dev-match]", tpl),
+      devApply: $("[data-dev-apply]", tpl),
+      devMapOnly: $("[data-dev-maponly]", tpl),
     },
+    deviceSource: null,   // "device" | "match" | null (null => derive from config)
   };
   rt.el.name.textContent = name;
+  wireDeviceControl(rt);
   $("#panes").appendChild(tpl);
   termHosts.set(rt.el.termHost, rt);
   createTerminal(rt);
@@ -414,6 +428,166 @@ function ensurePort(name) {
   state.runtimes.set(name, rt);
   scheduleTabsRefresh();
   return rt;
+}
+
+/* 6b. device control (resolved COM chip + runtime change popover) ========== */
+/* Reuses the backend contract: GET /api/devices lists system ports; POST
+   /api/ports/{name}/device swaps the device (fixed `device`) or the match spec
+   (`match`) at runtime. The chip mirrors the resolved COM + the port's note and
+   tags itself "auto" when the port is match-driven. */
+let openDevPop = null;      // { rt, pop, btn } — the single open popover
+let deviceCache = null;     // last GET /api/devices payload (for re-render on lang switch)
+
+function wireDeviceControl(rt) {
+  const popId = "dev-pop-" + String(rt.name).replace(/[^A-Za-z0-9_-]/g, "_");
+  rt.el.devPop.id = popId;
+  rt.el.devBtn.setAttribute("aria-controls", popId);
+  rt.el.devBtn.addEventListener("click", () => toggleDevicePop(rt));
+  rt.el.devRefresh.addEventListener("click", () => refreshDeviceList(rt));
+  rt.el.devApply.addEventListener("click", () => applyMatchSpec(rt));
+  rt.el.devMatch.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); applyMatchSpec(rt); }
+  });
+}
+
+/* "match" when the port is auto-discovered (a match spec is configured and no
+   explicit device was applied this session), else "device". An explicit runtime
+   change stamps rt.deviceSource and wins. */
+function deviceSource(name) {
+  const rt = state.runtimes.get(name);
+  if (rt && rt.deviceSource) return rt.deviceSource;
+  const pc = state.portConfig(name);
+  if (pc && pc.match && Object.keys(pc.match).length) return "match";
+  return "device";
+}
+
+function updateDeviceChip(rt) {
+  const meta = state.ports.get(rt.name) || {};
+  const dev = meta.device || "";
+  rt.el.devName.textContent = dev || "\u2013";
+  rt.el.devDesc.textContent = meta.description || "";
+  const auto = deviceSource(rt.name) === "match";
+  rt.el.devAuto.hidden = !auto;
+  const parts = [];
+  if (dev) parts.push(dev);
+  if (meta.description) parts.push(meta.description);
+  if (auto) parts.push(t("device.auto"));
+  rt.el.devChip.title = parts.join("  \u00b7  ");
+}
+
+function closeDevicePop() {
+  if (!openDevPop) return;
+  openDevPop.pop.hidden = true;
+  openDevPop.btn.setAttribute("aria-expanded", "false");
+  openDevPop = null;
+}
+
+function toggleDevicePop(rt) {
+  if (openDevPop && openDevPop.rt === rt) { closeDevicePop(); return; }
+  closeDevicePop();
+  rt.el.devPop.hidden = false;
+  rt.el.devBtn.setAttribute("aria-expanded", "true");
+  openDevPop = { rt, pop: rt.el.devPop, btn: rt.el.devBtn };
+  refreshDeviceList(rt);
+  rt.el.devMatch.focus();
+}
+
+/* Parse a match spec exactly like the CLI's `--match`: a JSON object, or
+   compact `k=v` pairs (values stay strings, so `vid=0x1A86` passes through). */
+function parseMatch(text) {
+  const s = String(text == null ? "" : text).trim();
+  if (!s) throw new Error(t("device.match_invalid"));
+  if (s.charAt(0) === "{") {
+    let obj;
+    try { obj = JSON.parse(s); } catch (_e) { throw new Error(t("device.match_invalid")); }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error(t("device.match_invalid"));
+    return obj;
+  }
+  const spec = {};
+  s.split(",").forEach((part) => {
+    part = part.trim();
+    if (!part) return;
+    const eq = part.indexOf("=");
+    if (eq <= 0) throw new Error(t("device.match_invalid"));
+    const key = part.slice(0, eq).trim();
+    if (!key) throw new Error(t("device.match_invalid"));
+    spec[key] = part.slice(eq + 1).trim();
+  });
+  if (!Object.keys(spec).length) throw new Error(t("device.match_invalid"));
+  return spec;
+}
+
+async function refreshDeviceList(rt) {
+  rt.el.devList.innerHTML = '<div class="dev-empty">\u2026</div>';
+  const data = await api("GET", "/api/devices");
+  if (!data.ok) {
+    rt.el.devList.innerHTML = '<div class="dev-empty">' + escapeHtml(t("device.loadFailed")) + "</div>";
+    return;
+  }
+  deviceCache = data.devices || [];
+  renderDeviceList(rt, deviceCache);
+}
+
+function renderDeviceList(rt, devices) {
+  const cur = (state.ports.get(rt.name) || {}).device;
+  const list = rt.el.devList;
+  list.innerHTML = "";
+  if (!devices.length) {
+    list.innerHTML = '<div class="dev-empty">' + escapeHtml(t("device.noDevices")) + "</div>";
+    return;
+  }
+  devices.forEach((d) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.setAttribute("role", "option");
+    const isCur = d.device === cur;
+    row.className = "dev-row" + (isCur ? " is-current" : "");
+    row.setAttribute("aria-selected", String(isCur));
+    if (isCur) row.setAttribute("aria-current", "true");
+    row.innerHTML = '<span class="dr-dev">' + escapeHtml(d.device || "") + "</span>" +
+      '<span class="dr-desc">' + escapeHtml(d.description || "") + "</span>" +
+      (isCur ? '<span class="dr-cur">' + escapeHtml(t("device.current")) + "</span>" : "");
+    row.addEventListener("click", () => applyDevice(rt, { device: d.device }));
+    list.appendChild(row);
+  });
+}
+
+function applyMatchSpec(rt) {
+  let spec;
+  try { spec = parseMatch(rt.el.devMatch.value); }
+  catch (e) { toast(t("device.error", { msg: e.message }), "error"); return; }
+  applyDevice(rt, { match: spec });
+}
+
+/* Fold a device-change response (the full port status dict) into shared state. */
+function mergePortStatus(name, data) {
+  const prev = state.ports.get(name) || {};
+  const merged = Object.assign({}, prev);
+  Object.keys(data).forEach((k) => { if (k !== "ok") merged[k] = data[k]; });
+  state.ports.set(name, merged);
+  const rt = state.runtimes.get(name);
+  if (rt && data.open !== undefined) {
+    rt.state = data.open ? "open" : (data.last_error ? "error" : "closed");
+  }
+}
+
+async function applyDevice(rt, spec) {
+  if (rt.devBusy) return;
+  rt.devBusy = true;
+  rt.el.devPop.classList.add("busy");
+  const body = Object.assign({ reopen: !rt.el.devMapOnly.checked }, spec);
+  const data = await api("POST", "/api/ports/" + encodeURIComponent(rt.name) + "/device", { body });
+  rt.devBusy = false;
+  rt.el.devPop.classList.remove("busy");
+  if (!data.ok) return;   // server error already toasted; keep the popover open
+  rt.deviceSource = (spec.device != null) ? "device" : "match";
+  mergePortStatus(rt.name, data);
+  updateDeviceChip(rt);
+  updatePortHeader(rt);
+  updateTabState(rt.name);
+  updateGlobalStats();
+  closeDevicePop();
+  toast(t("device.changed", { device: data.device || "" }), "ok");
 }
 
 let tabsTimer = null;
@@ -532,6 +706,7 @@ function updatePortHeader(rt) {
   const pct = buf && capLines ? clamp((buf.count / capLines) * 100, 0, 100) : 0;
   rt.el.bufPct.textContent = Math.round(pct) + "%";
   rt.el.bufPct.title = buf ? t("bufHint", { n: buf.count, bytes: fmtBytes(buf.bytes) }) : "";
+  updateDeviceChip(rt);
 }
 
 function drawSpark(rt) {
@@ -814,6 +989,7 @@ function buildTabs() {
 }
 function activate(name) {
   if (!state.runtimes.has(name)) ensurePort(name);
+  closeDevicePop();
   state.active = name;
   state.runtimes.forEach((rt, n) => {
     const on = n === name;
@@ -980,6 +1156,14 @@ function bindUI() {
         !e.target.closest("#btnPrev") && !e.target.closest("#btnNext") && !e.target.closest("#btnServerSearch")) {
       box.hidden = true;
     }
+  });
+
+  // device popover: Esc closes; a click outside the popover (or its trigger) closes.
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDevicePop(); });
+  document.addEventListener("click", (e) => {
+    if (!openDevPop) return;
+    if (e.target.closest(".dev-pop") || e.target.closest(".dev-btn")) return;
+    closeDevicePop();
   });
 }
 
