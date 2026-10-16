@@ -1,30 +1,33 @@
-# serialhub MCP 使用说明
+**English** · [简体中文](MCP.zh-CN.md)
 
-本文件面向**要用 serialhub 操作串口的 AI agent**（以及为 agent 配置 MCP 的工程师）。
-它把常驻守护 `serialhub serve` 暴露为 **14 个 MCP 工具**，让 agent 直接以工具调用完成
-「列口 → 打开 → 等待/读取/搜索 → 发送 → 快照/导出/桥」的全流程。
+# serialhub MCP guide
 
-> 契约来源：[`ARCHITECTURE.md`](ARCHITECTURE.md) §11；实现：[`../serialhub/mcp_server.py`](../serialhub/mcp_server.py)。
-> 主手册：[`../README.md`](../README.md)。
+This document is for **AI agents that operate serial ports with serialhub** (and for engineers configuring
+MCP for those agents). It exposes the persistent `serialhub serve` daemon as **14 MCP tools**, letting an
+agent complete the whole flow of "list ports → open → wait/read/search → send → snapshot/export/bridge"
+through tool calls.
+
+> Contract source: [`ARCHITECTURE.md`](ARCHITECTURE.md) §11; implementation: [`../serialhub/mcp_server.py`](../serialhub/mcp_server.py).
+> Main manual: [`../README.md`](../README.md).
 
 ---
 
-## 1. 传输与进程模型
+## 1. Transport and process model
 
-- **传输**：stdio（默认）。命令为 `python -m serialhub mcp --stdio`，或直接跑 `serialhub/mcp_server.py`。
-- **瘦客户端**：MCP 服务器**不自己打开串口**；每个工具都通过 HTTP 调用常驻守护
-  （`serialhub.client.Client`，stdlib `urllib.request`）。因此 **守护必须先起**（`serialhub serve`）。
-- **非阻塞**：阻塞型工具（`wait_for`、`send+wait`）跑在 worker 线程（`asyncio.to_thread`），
-  MCP 事件循环不会卡。
-- **兼容**：`mcp_compat.py` 同时支持官方 SDK 1.x（`FastMCP`）与 2.x（`MCPServer`），
-  代码无需按版本修改。
+- **Transport**: stdio (default). The command is `python -m serialhub mcp --stdio`, or run `serialhub/mcp_server.py` directly.
+- **Thin client**: the MCP server **does not open serial ports itself**; every tool calls the persistent daemon
+  over HTTP (`serialhub.client.Client`, stdlib `urllib.request`). So **the daemon must be started first** (`serialhub serve`).
+- **Non-blocking**: blocking tools (`wait_for`, `send+wait`) run on a worker thread (`asyncio.to_thread`), so the
+  MCP event loop is not stalled.
+- **Compatibility**: `mcp_compat.py` supports both the official SDK 1.x (`FastMCP`) and 2.x (`MCPServer`), with no
+  code changes needed per version.
 
 ```
         ┌──────────────┐   MCP (stdio/JSON-RPC)   ┌──────────────────┐   HTTP/REST   ┌────────────────────┐
         │    Agent      │ ───────────────────────▶ │  serialhub MCP    │ ───────────▶  │  serialhub serve    │
         │  (tool calls) │ ◀─────────────────────── │  (stdio server)   │ ◀───────────  │  Hub + RingBuffer   │
-        └──────────────┘   结构化 JSON 结果          └──────────────────┘  {ok,...}/    └─────────┬──────────┘
-                                                                           {ok:false}             │ 串口 / TCP 桥
+        └──────────────┘   structured JSON result  └──────────────────┘  {ok,...}/    └─────────┬──────────┘
+                                                                           {ok:false}             │ serial / TCP bridge
                                                                                                   ▼
                                                                                             (COMx / loop:// / ...)
 ```
@@ -34,41 +37,41 @@ sequenceDiagram
     participant A as Agent
     participant M as serialhub MCP (stdio)
     participant D as serialhub serve (daemon)
-    participant P as 串口设备
+    participant P as Serial device
     A->>M: tools/call wait_for(port,regex,timeout_ms)
     M->>D: GET /api/ports/{port}/wait?regex=...&timeout_ms=...
-    D->>D: 先扫环形缓冲（已到哨兵立即返回）
-    D->>P: （若没有）等待读线程写入新行
-    P-->>D: 一行文本
+    D->>D: scan the ring buffer first (return immediately if the sentinel is already there)
+    D->>P: (if not) wait for the reader thread to write a new line
+    P-->>D: a line of text
     D-->>M: {ok:true, matched:true, line:{seq,ts_ms,text}, seq, ts_ms}
-    M-->>A: 结构化 JSON（工具结果）
-    Note over A,D: matched:false 是超时的正常结果，仍 ok:true
+    M-->>A: structured JSON (tool result)
+    Note over A,D: matched:false is a normal timeout result, still ok:true
 ```
 
 ---
 
-## 2. 安装与自检
+## 2. Install and self-check
 
 ```powershell
-pip install -r requirements.txt      # 运行时
-pip install "mcp>=1.9"               # MCP 支持（或 pip install -r requirements-dev.txt）
+pip install -r requirements.txt      # runtime
+pip install "mcp>=1.9"               # MCP support (or pip install -r requirements-dev.txt)
 
-# 协议自检（自写 stdio JSON-RPC 客户端，不需要守护）
+# Protocol self-check (hand-written stdio JSON-RPC client, no daemon needed)
 python tools/mcp_smoke.py
-#   initialize + tools/list -> 应打印 14 个工具，末尾 "# RESULT: PASS"
+#   initialize + tools/list -> should print 14 tools and end with "# RESULT: PASS"
 
-# 端到端冒烟（需先起守护）
+# End-to-end smoke (needs the daemon running)
 python -m serialhub serve --config examples/config.yaml
 python tools/mcp_smoke.py --full --tool-timeout 30
 #   initialize + tools/list + list_ports -> "# RESULT: PASS"
 ```
 
-`tools/mcp_smoke.py` 直接说 JSON-RPC 2.0（不依赖 SDK 客户端），因此它通过即证明
-`initialize` / `tools/list` / `tools/call` 契约正确。
+`tools/mcp_smoke.py` speaks JSON-RPC 2.0 directly (it does not depend on an SDK client), so when it passes it
+proves the `initialize` / `tools/list` / `tools/call` contract is correct.
 
 ---
 
-## 3. 注册到客户端
+## 3. Register with a client
 
 ### opencode
 
@@ -83,24 +86,10 @@ python tools/mcp_smoke.py --full --tool-timeout 30
 }
 ```
 
-等价的模块写法（需能 `import serialhub`，例如已 `pip install -e .`）：
-`"command": ["python", "-m", "serialhub", "mcp", "--stdio"]`。
+The equivalent module form (needs `import serialhub` to work, e.g. after `pip install -e .`):
+`"command": ["python", "-m", "serialhub", "mcp", "--stdio"]`.
 
-### Claude Desktop（`claude_desktop_config.json`）
-
-```json
-{
-  "mcpServers": {
-    "serialhub": {
-      "command": "python",
-      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
-      "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
-    }
-  }
-}
-```
-
-### Cursor（`.cursor/mcp.json`）
+### Claude Desktop (`claude_desktop_config.json`)
 
 ```json
 {
@@ -114,439 +103,462 @@ python tools/mcp_smoke.py --full --tool-timeout 30
 }
 ```
 
-### 环境变量
+### Cursor (`.cursor/mcp.json`)
 
-| 变量 | 默认 | 说明 |
+```json
+{
+  "mcpServers": {
+    "serialhub": {
+      "command": "python",
+      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+      "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
+    }
+  }
+}
+```
+
+### Environment variables
+
+| Variable | Default | Notes |
 |---|---|---|
-| `SERIALHUB_URL` | `http://127.0.0.1:8765` | 守护基址（改端口时同步改这里） |
-| `SERIALHUB_TOKEN` | 空 | 守护设了 `server.token` 时填同样的 Bearer token |
+| `SERIALHUB_URL` | `http://127.0.0.1:8765` | Daemon base (keep this in sync when you change the port) |
+| `SERIALHUB_TOKEN` | empty | Fill the same Bearer token when the daemon sets `server.token` |
 
 ---
 
-## 4. 错误约定
+## 4. Error conventions
 
-- **所有工具**统一返回 `{"ok": true, ...}` 或 `{"ok": false, "error": "<可读消息>"}`。
-  MCP 的 JSON-RPC 层本身不报错；`ok:false` 出现在**工具结果内容**里。
-- 常见错误映射（来自守护的 HTTP 层）：
+- **Every tool** uniformly returns `{"ok": true, ...}` or `{"ok": false, "error": "<readable message>"}`.
+  The MCP JSON-RPC layer itself does not raise; `ok:false` appears in the **tool result content**.
+- Common error mapping (from the daemon's HTTP layer):
 
-| `error` 示例 | HTTP | 触发 |
+| `error` example | HTTP | Trigger |
 |---|---|---|
-| `connection failed: ...` | (客户端) | 守护没起 / 地址不对 |
-| `unknown port: 'nope'` | 404 | 端口名不在配置里 |
-| `<ValueError 文本>` | 400 | 参数非法（如 `export` 的 format 不认识） |
-| `<RuntimeError 文本>` | 409 | 设备未打开就 `send` 等 |
-| `invalid request` | 422 | 请求体缺字段 / 类型错 |
-| `unauthorized` | 401 | 守护设了 token 但没带对 |
+| `connection failed: ...` | (client) | Daemon not started / wrong address |
+| `unknown port: 'nope'` | 404 | Port name not in the config |
+| `<ValueError text>` | 400 | Invalid argument (e.g. an unrecognized `export` format) |
+| `<RuntimeError text>` | 409 | e.g. `send` before the device is open |
+| `invalid request` | 422 | Request body missing a field / wrong type |
+| `unauthorized` | 401 | The daemon sets a token but it wasn't sent correctly |
 
-- **`wait_for` 超时不是错误**：15s 没等到就返回
-  `{"ok": true, "matched": false, "line": null, "seq": null, "ts_ms": null, "from_seq": <起点>}`。
-  agent 应据 `matched` 分流，而不是把超时当失败。
+- **A `wait_for` timeout is not an error**: if nothing arrives within 15s it returns
+  `{"ok": true, "matched": false, "line": null, "seq": null, "ts_ms": null, "from_seq": <start>}`.
+  The agent should branch on `matched` rather than treating a timeout as a failure.
 
 ---
 
-## 5. 工具参考（14 个）
+## 5. Tool reference (14)
 
-约定：下文「参数表」中的默认值即工具签名默认值；「返回」省略公共的 `ok` / `port` 字段。
+Convention: the defaults in the "Args" tables below are the tool-signature defaults; "Returns" omits the
+common `ok` / `port` fields.
 
 ---
 
 ### 5.1 `list_ports`
 
-列出系统串口 + 已配置端口（含 open 状态、缓冲统计、桥接状态）。
+List system serial ports + configured ports (with open state, buffer stats, and bridge state).
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Args | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| （无） | | | | |
+| (none) | | | | |
 
-返回关键字段：
+Key return fields:
 
-| 字段 | 说明 |
+| Field | Notes |
 |---|---|
-| `system[]` | 系统串口：`{device, description, hwid}` |
-| `ports[]` | 已配置口：`{name, device, description, open, baud, data_bits, parity, stop_bits, flow, rx_lines, tx_lines, last_error, reconnect_count, buffer, tcp_bridge}` |
+| `system[]` | System serial ports: `{device, description, hwid}` |
+| `ports[]` | Configured ports: `{name, device, description, open, baud, data_bits, parity, stop_bits, flow, rx_lines, tx_lines, last_error, reconnect_count, buffer, tcp_bridge}` |
 | `buffer` | `{count, bytes, first_seq, last_seq, dropped_total}` |
-| `tcp_bridge` | `{mode, port, host, active}` 或 `null` |
+| `tcp_bridge` | `{mode, port, host, active}` or `null` |
 
 ```json
 {"ok":true,"system":[{"device":"COM11","description":"USB-SERIAL CH340","hwid":"USB VID:PID=1A86:7523"}],
  "ports":[{"name":"console","device":"COM11","open":true,"baud":921600,"buffer":{"count":1281,"bytes":91234,"first_seq":3,"last_seq":1284,"dropped_total":0},"tcp_bridge":null}]}
 ```
 
-**何时用**：每次会话开始先列口；确认目标口是否已 open、缓冲里有多少行、游标起点（`first_seq`/`last_seq`）。
+**When to use**: list ports at the start of every session; confirm whether the target port is open, how many lines
+are buffered, and the cursor start (`first_seq`/`last_seq`).
 
 ---
 
 ### 5.2 `open`
 
-打开（或重开）某口，可覆盖波特率 / 设备路径。
+Open (or reopen) a port, optionally overriding baud / device path.
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Args | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `port` | str | 是 | | 逻辑口名（如 `console`） |
-| `baud` | int | 否 | `115200` | 波特率覆盖 |
-| `device` | str | 否 | `null` | 设备路径覆盖（`COM11` / `/dev/ttyUSB0`） |
+| `port` | str | yes | | Logical port name (e.g. `console`) |
+| `baud` | int | no | `115200` | Baud override |
+| `device` | str | no | `null` | Device path override (`COM11` / `/dev/ttyUSB0`) |
 
-返回：端口 dict（`open:true`，含 `buffer` / `tcp_bridge`）。
+Returns: the port dict (`open:true`, including `buffer` / `tcp_bridge`).
 
 ```json
 {"ok":true,"name":"console","device":"COM11","open":true,"baud":921600,"data_bits":8,"parity":"N","stop_bits":1.0,"flow":"none","rx_lines":0,"tx_lines":0,"last_error":null,"reconnect_count":0,"buffer":{"count":0,"bytes":0,"first_seq":null,"last_seq":null,"dropped_total":0},"tcp_bridge":null}
 ```
 
-**何时用**：口是 `autostart:false`，或刚 `close` 过需要重开时。
+**When to use**: when a port is `autostart:false`, or right after a `close` when you need to reopen it.
 
 ---
 
 ### 5.3 `close`
 
-关闭某口（**缓冲保留**）。
+Close a port (**the buffer is kept**).
 
-| 参数 | 类型 | 必填 | 默认 |
+| Args | Type | Required | Default |
 |---|---|---|---|
-| `port` | str | 是 | |
+| `port` | str | yes | |
 
-返回：端口 dict（`open:false`）。
+Returns: the port dict (`open:false`).
 
 ```json
 {"ok":true,"name":"console","device":"COM11","open":false,"baud":921600,"buffer":{"count":1281,"bytes":91234,"first_seq":3,"last_seq":1284,"dropped_total":0},"tcp_bridge":null}
 ```
 
-**何时用**：让出串口给其它程序、或临时停采又不想丢历史。
+**When to use**: to hand the serial port to another program, or to pause sampling temporarily without losing history.
 
 ---
 
 ### 5.4 `status`
 
-守护/端口状态。省略 `port` 返回整体。
+Daemon/port status. Omit `port` for the overall view.
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Args | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `port` | str | 否 | `null` | 省略则返回守护级状态 |
+| `port` | str | no | `null` | If omitted, returns daemon-level status |
 
-返回：给定 `port` → 单口 dict **加** `server`；省略 → `{server, ports[]}`。
+Returns: with a given `port` -> the single-port dict **plus** `server`; omitted -> `{server, ports[]}`.
 
-| `server` 字段 | 说明 |
+| `server` field | Notes |
 |---|---|
-| `host` / `port` | 监听地址/端口 |
-| `version` | serialhub 版本 |
-| `uptime_ms` | 守护已运行毫秒 |
+| `host` / `port` | Listen address/port |
+| `version` | serialhub version |
+| `uptime_ms` | Milliseconds the daemon has been running |
 
 ```json
 {"ok":true,"server":{"host":"127.0.0.1","port":8765,"version":"0.1.0","uptime_ms":32045},"ports":[{"name":"console","open":true,"device":"COM11","last_error":null,"reconnect_count":0,"buffer":{"count":1281,"bytes":91234,"first_seq":3,"last_seq":1284,"dropped_total":0}}]}
 ```
 
-**何时用**：健康检查、确认 `last_error` / `reconnect_count`（断线诊断）。
+**When to use**: health checks; confirming `last_error` / `reconnect_count` (disconnect diagnosis).
 
 ---
 
 ### 5.5 `read`
 
-按游标**增量读取**缓冲行（不重复消费）。这是核心读取工具。
+Read buffered lines **incrementally by cursor** (no double consumption). This is the core read tool.
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Args | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `port` | str | 是 | | 逻辑口名 |
-| `since_seq` | int | 否 | `null` | 返回 `seq > since_seq`（**首选游标**） |
-| `since_ts` | int | 否 | `null` | 无 `since_seq` 时按 `ts_ms > since_ts` |
-| `filter` | str | 否 | `null` | 正则，仅返回匹配行 |
-| `limit` | int | 否 | `null` | 最多返回行数 |
-| `strip_ansi` | bool | 否 | `false` | 去 ANSI 转义 |
+| `port` | str | yes | | Logical port name |
+| `since_seq` | int | no | `null` | Return `seq > since_seq` (**preferred cursor**) |
+| `since_ts` | int | no | `null` | When no `since_seq`, use `ts_ms > since_ts` |
+| `filter` | str | no | `null` | Regex; return only matching lines |
+| `limit` | int | no | `null` | Max lines to return |
+| `strip_ansi` | bool | no | `false` | Strip ANSI escapes |
 
-返回关键字段：
+Key return fields:
 
-| 字段 | 说明 |
+| Field | Notes |
 |---|---|
-| `lines[]` | 旧→新：`{seq, port, ts_ms, text, ansi, kind}` |
-| `count` | 本次行数 |
-| `next_seq` | 下次续读游标（= 最后返回行的 `seq`） |
-| `dropped` | 因缓冲淘汰而永久丢失的行数（游标早于 `first_seq-1` 时 >0） |
-| `has_more` | 仍有满足条件的行未返回 |
-| `first_seq` / `last_seq` | 当前缓冲最老/最新 `seq` |
+| `lines[]` | Old→new: `{seq, port, ts_ms, text, ansi, kind}` |
+| `count` | Line count this call |
+| `next_seq` | Cursor for the next resume (= the last returned line's `seq`) |
+| `dropped` | Lines permanently lost to buffer eviction (>0 when the cursor predates `first_seq-1`) |
+| `has_more` | There are still matching lines not returned |
+| `first_seq` / `last_seq` | Oldest/newest `seq` in the current buffer |
 
 ```json
 {"ok":true,"port":"console","lines":[{"seq":58,"port":"console","ts_ms":1730000000150,"text":"[BOOT] stage 2","ansi":false,"kind":"rx"}],"count":1,"next_seq":58,"dropped":0,"has_more":false,"first_seq":3,"last_seq":58}
 ```
 
-**何时用**：常规取数。第一次用 `since_seq:0` 或先 `snapshot` 看起点；拿到 `next_seq` 后一直用它当 `since_seq`。
-`dropped>0` 时改从 `first_seq` 续。
+**When to use**: routine reads. Start with `since_seq:0` or a `snapshot` to see the start; once you have `next_seq`,
+keep passing it as `since_seq`. When `dropped>0`, resume from `first_seq` instead.
 
 ---
 
 ### 5.6 `search`
 
-正则搜索全缓冲，可带上下文窗口（定位用，不是增量）。
+Regex search over the whole buffer, optionally with a context window (for locating, not incremental).
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Args | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `port` | str | 是 | | |
-| `regex` | str | 是 | | 正则 |
-| `context` | int | 否 | `0` | 命中的前/后各取几行 |
-| `since_seq` | int | 否 | `null` | 只搜 `seq > since_seq` |
-| `limit` | int | 否 | `null` | 最多命中数 |
+| `port` | str | yes | | |
+| `regex` | str | yes | | Regex |
+| `context` | int | no | `0` | How many lines to take before/after each hit |
+| `since_seq` | int | no | `null` | Search only `seq > since_seq` |
+| `limit` | int | no | `null` | Max hits |
 
-返回关键字段：
+Key return fields:
 
-| 字段 | 说明 |
+| Field | Notes |
 |---|---|
 | `hits[]` | `{seq, ts_ms, text, kind, match, context_before[], context_after[]}` |
-| `count` | 命中数 |
-| `next_seq` | 最后命中的 `seq`（可作续搜游标） |
-| `regex` | 回显所用正则 |
+| `count` | Hit count |
+| `next_seq` | The last hit's `seq` (usable as a resume-search cursor) |
+| `regex` | Echoes the regex used |
 
 ```json
 {"ok":true,"port":"console","hits":[{"seq":91,"ts_ms":1730000000444,"text":"[ERR] HardFault handler entered","kind":"rx","match":"HardFault","context_before":[{"seq":90,"ts_ms":1730000000440,"text":"[BOOT] started"}],"context_after":[{"seq":92,"ts_ms":1730000000446,"text":"pc=0x90001234"}]}],"count":1,"next_seq":91,"regex":"HardFault"}
 ```
 
-**何时用**：`wait_for` 超时后排障（搜 `HardFault|ASSERT|panic`）；在长日志里定位状态转换。
+**When to use**: forensics after a `wait_for` timeout (search `HardFault|ASSERT|panic`); locating state transitions in long logs.
 
 ---
 
 ### 5.7 `wait_for`
 
-**阻塞**等待新行匹配正则（或超时）。核心哨兵工具。
+**Block** until a new line matches a regex (or a timeout). The core sentinel tool.
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Args | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `port` | str | 是 | | |
-| `regex` | str | 是 | | 要等的哨兵 |
-| `timeout_ms` | int | 否 | `10000` | 最长等待毫秒 |
-| `since_seq` | int | 否 | `null` | 只看 `seq > since_seq` |
+| `port` | str | yes | | |
+| `regex` | str | yes | | The sentinel to wait for |
+| `timeout_ms` | int | no | `10000` | Max wait in milliseconds |
+| `since_seq` | int | no | `null` | Consider only `seq > since_seq` |
 
-返回关键字段：
+Key return fields:
 
-| 字段 | 说明 |
+| Field | Notes |
 |---|---|
-| `matched` | 命中为 `true`；超时为 `false`（**仍 `ok:true`**） |
-| `line` | 命中行 `{seq, port, ts_ms, text, ansi, kind}` 或 `null` |
-| `seq` / `ts_ms` | 命中行的序号/时间（超时为 `null`） |
-| `from_seq` | 本次等待的起点游标 |
+| `matched` | `true` on a hit; `false` on timeout (**still `ok:true`**) |
+| `line` | The hit line `{seq, port, ts_ms, text, ansi, kind}`, or `null` |
+| `seq` / `ts_ms` | The hit line's sequence/time (`null` on timeout) |
+| `from_seq` | The start cursor for this wait |
 
-命中：
+Hit:
 ```json
 {"ok":true,"port":"console","matched":true,"line":{"seq":57,"port":"console","ts_ms":1730000001234,"text":"[BOOT] Bootloader v1.3.0 starting","ansi":false,"kind":"rx"},"seq":57,"ts_ms":1730000001234,"from_seq":42}
 ```
 
-超时：
+Timeout:
 ```json
 {"ok":true,"port":"console","matched":false,"line":null,"seq":null,"ts_ms":null,"from_seq":42}
 ```
 
-行为细节：先扫环形缓冲，**已存在的匹配行立即返回**；否则订阅广播阻塞等待。给 `since_seq` 时只考虑 `seq > since_seq`。
+Behavior details: it scans the ring buffer first and **returns an already-present match immediately**; otherwise it
+subscribes to the broadcast and blocks waiting. When `since_seq` is given, only `seq > since_seq` is considered.
 
-**何时用**：等启动横幅 / 等命令提示符 / 等"OK/ERROR"结论文本。**永远用 `matched` 分流**。
+**When to use**: waiting for a boot banner / a command prompt / an "OK/ERROR" conclusion text. **Always branch on `matched`.**
 
 ---
 
 ### 5.8 `send`
 
-向口写数据（追加 EOL），可选等待回复。
+Write data to a port (EOL appended), optionally waiting for a reply.
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Args | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `port` | str | 是 | | |
-| `data` | str | 是 | | 载荷（**不含**结尾） |
-| `eol` | str | 否 | `"\r\n"` | `crlf`/`lf`/`cr`/`none` 或字面量 |
-| `wait_regex` | str | 否 | `null` | 设了就阻塞等新行匹配它 |
-| `timeout_ms` | int | 否 | `null` | `wait_regex` 的等待上限（缺省 10000） |
+| `port` | str | yes | | |
+| `data` | str | yes | | Payload (**without** the terminator) |
+| `eol` | str | no | `"\r\n"` | `crlf`/`lf`/`cr`/`none` or a literal |
+| `wait_regex` | str | no | `null` | If set, block until a new line matches it |
+| `timeout_ms` | int | no | `null` | Wait ceiling for `wait_regex` (default 10000) |
 
-返回关键字段：
+Key return fields:
 
-| 字段 | 说明 |
+| Field | Notes |
 |---|---|
-| `sent_bytes` | 实际写出字节数（含 EOL） |
-| `sent` | 发送的文本 |
-| `waited` | 是否进行了等待 |
-| `matched` / `line` / `seq` | 等待命中信息（未等待或超时时 `matched:false`） |
+| `sent_bytes` | Bytes actually written (including EOL) |
+| `sent` | The text sent |
+| `waited` | Whether a wait was performed |
+| `matched` / `line` / `seq` | Wait-hit info (`matched:false` when not waiting or on timeout) |
 
-发送并等回应：
+Send and wait for the reply:
 ```json
 {"ok":true,"port":"console","sent_bytes":8,"sent":"reboot","waited":true,"matched":true,"line":{"seq":57,"port":"console","ts_ms":1730000001234,"text":"[BOOT] Bootloader v1.3.0 starting","ansi":false,"kind":"rx"},"seq":57}
 ```
 
-发送（不等待）：
+Send (no wait):
 ```json
 {"ok":true,"port":"console","sent_bytes":8,"sent":"reboot","waited":false,"matched":false,"line":null,"seq":null}
 ```
 
-注意：本进程发出的内容会以 `kind="tx"` 入缓冲（回显）；设备回复是 `kind="rx"`。
-`wait_regex` 的起点取发送前的最新 `seq`，因此**只会匹配发送后出现的新行**。
+Note: content this process sends is buffered with `kind="tx"` (echo); device replies are `kind="rx"`.
+The `wait_regex` start is the latest `seq` before sending, so it **only matches new lines that appear after the send**.
 
-**何时用**：下发命令；批量流程里直接`send`+`wait_regex`一步到位。
+**When to use**: issuing commands; in batch flows, a direct `send`+`wait_regex` gets it done in one step.
 
 ---
 
 ### 5.9 `snapshot`
 
-取该口缓冲**末尾 N 行**（看当前现场）。
+Fetch the **last N lines** of a port's buffer (see the current state).
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Args | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `port` | str | 是 | | |
-| `tail_lines` | int | 否 | `200` | 末尾行数 |
+| `port` | str | yes | | |
+| `tail_lines` | int | no | `200` | Number of trailing lines |
 
-返回：`{lines[], count, tail_lines, port}`。
+Returns: `{lines[], count, tail_lines, port}`.
 
 ```json
 {"ok":true,"port":"console","tail_lines":200,"lines":[{"seq":1282,"port":"console","ts_ms":1730000009000,"text":"idle","ansi":false,"kind":"rx"}],"count":1}
 ```
 
-**何时用**：会话开头快速看现场；等待前确认设备当前状态。
+**When to use**: take a quick look at the state at the start of a session; confirm the device's current state before waiting.
 
 ---
 
 ### 5.10 `export`
 
-把该口缓冲导出到文件（raw / noansi / json）。**会写文件**。
+Export a port's buffer to a file (raw / noansi / json). **This writes a file**.
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Args | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `port` | str | 是 | | |
-| `path` | str | 否 | `null` | 目标路径（缺省守护写入 `<cwd>/exports/<port>-<ts>.<ext>`） |
-| `format` | str | 否 | `"raw"` | `raw` / `noansi` / `json`(JSONL) |
-| `range` | str | 否 | `null` | seq 范围，如 `"100-500"` |
+| `port` | str | yes | | |
+| `path` | str | no | `null` | Target path (default: the daemon writes `<cwd>/exports/<port>-<ts>.<ext>`) |
+| `format` | str | no | `"raw"` | `raw` / `noansi` / `json`(JSONL) |
+| `range` | str | no | `null` | seq range, e.g. `"100-500"` |
 
-返回：`{path, bytes, format, count, port}`。
+Returns: `{path, bytes, format, count, port}`.
 
 ```json
 {"ok":true,"port":"console","path":"D:\\...\\serialhub\\exports\\console-1730000010000.jsonl","format":"json","bytes":45120,"count":1284}
 ```
 
-**何时用**：留证 / 交给别的工具分析；排障后落盘整段。
+**When to use**: preserving evidence / handing off to another tool for analysis; dumping a whole segment after troubleshooting.
 
 ---
 
 ### 5.11 `tcp_bridge`
 
-启动/停止/查看某口的 TCP 桥。
+Start/stop/inspect a port's TCP bridge.
 
-| 参数 | 类型 | 必填 | 默认 | 说明 |
+| Args | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `action` | str | 是 | | `start` / `stop` / `status` |
-| `port` | str | 是 | | 逻辑口名 |
-| `tcp_port` | int | 否 | `null` | `start`（server 模式）必填 |
-| `mode` | str | 否 | `"server"` | `server`（监听）/ `client`（连出） |
-| `host` | str | 否 | `null` | client 模式：远端地址（必填）；server 模式：监听绑定地址（默认 `127.0.0.1`，传 `0.0.0.0` 可跨机访问） |
+| `action` | str | yes | | `start` / `stop` / `status` |
+| `port` | str | yes | | Logical port name |
+| `tcp_port` | int | no | `null` | Required for `start` (server mode) |
+| `mode` | str | no | `"server"` | `server` (listen) / `client` (dial out) |
+| `host` | str | no | `null` | client mode: remote address (required); server mode: listen bind address (default `127.0.0.1`, pass `0.0.0.0` for cross-machine access) |
 
-返回：`{port, mode, tcp_port, host, active}`；`action=status` 时额外含 `clients`（当前连接数）。
+Returns: `{port, mode, tcp_port, host, active}`; with `action=status` it also includes `clients` (current connection count).
 
 ```json
 {"ok":true,"port":"console","mode":"server","tcp_port":4001,"host":null,"active":true,"clients":1}
 ```
 
-注意：server 模式默认绑定回环 `127.0.0.1`；`host` 参数在 server 模式即监听地址（传 `0.0.0.0` 可跨机 `nc`，并需放行防火墙）。client 模式连出到 `host:tcp_port`。
+Note: server mode binds to loopback `127.0.0.1` by default; in server mode `host` is the listen address (pass
+`0.0.0.0` for cross-machine `nc`, and allow it through the firewall). Client mode dials out to `host:tcp_port`.
 
-**何时用**：把串口喂给别的 TCP 工具 / 远端串口服务器的透传入口。
+**When to use**: feeding the serial port to another TCP tool / a relay entry point to a remote serial server.
 
 ---
 
 ### 5.12 `mark`
 
-在缓冲中插入带标签的标记行（`kind="mark"`）。
+Insert a labelled marker line into the buffer (`kind="mark"`).
 
-| 参数 | 类型 | 必填 |
+| Args | Type | Required |
 |---|---|---|
-| `port` | str | 是 |
-| `label` | str | 是 |
+| `port` | str | yes |
+| `label` | str | yes |
 
-返回：`{port, label, seq, ts_ms}`。
+Returns: `{port, label, seq, ts_ms}`.
 
 ```json
 {"ok":true,"port":"console","label":"before-reset","seq":42,"ts_ms":1730000000000}
 ```
 
-**何时用**：给流程分段。之后 `search` 该标签或按 `seq` 定位阶段边界。
+**When to use**: segment a flow. Afterward `search` for the label or locate phase boundaries by `seq`.
 
 ---
 
 ### 5.13 `clear`
 
-清空该口环形缓冲（**破坏性**）。
+Clear a port's ring buffer (**destructive**).
 
-| 参数 | 类型 | 必填 |
+| Args | Type | Required |
 |---|---|---|
-| `port` | str | 是 |
+| `port` | str | yes |
 
-返回：`{port, cleared}`（`cleared` = 被清掉的行数）。
+Returns: `{port, cleared}` (`cleared` = number of lines cleared).
 
 ```json
 {"ok":true,"port":"console","cleared":1284}
 ```
 
-**何时用**：重新开始一次干净采集，避免旧行干扰 `since_seq=0`。
+**When to use**: start a clean capture, avoiding old lines interfering with `since_seq=0`.
 
 ---
 
 ### 5.14 `reload`
 
-从磁盘热重载守护配置。
+Hot-reload the daemon config from disk.
 
-| 参数 | 类型 | 必填 |
+| Args | Type | Required |
 |---|---|---|
-| （无） | | |
+| (none) | | |
 
-返回：`{added[], removed[], restarted[], updated[]}`。
+Returns: `{added[], removed[], restarted[], updated[]}`.
 
 ```json
 {"ok":true,"added":["c6"],"removed":[],"restarted":["console"],"updated":[]}
 ```
 
-**何时用**：改过 `config.yaml` 后应用（增删口、改波特率/缓冲上限等）。缓冲区上限变化会**保留现有行**重建。
+**When to use**: apply after editing `config.yaml` (add/remove ports, change baud/buffer ceiling, etc.). A change
+to a buffer ceiling rebuilds the buffer while **keeping the existing lines**.
 
 ---
 
-## 6. Agent 操作手册（playbook）
+## 6. Agent playbook
 
-### 6.1 游标增量（不重复消费）
+### 6.1 Cursor increments (no double consumption)
 
-- 首次读取：`snapshot` 看现场，或 `read(since_seq=0, limit=...)`。
-- 记下返回的 `next_seq`，**下次原样传回** `since_seq=next_seq`。
-- `wait_for` 命中的 `seq` 也是天然游标：随后 `read(since_seq=<该 seq>)` 接着读后续行。
-- `dropped > 0` ⇒ 游标比缓冲最老行还早，有永久丢失；改从 `first_seq`（或最新）重来。
+- First read: `snapshot` to see the state, or `read(since_seq=0, limit=...)`.
+- Note the returned `next_seq`, and **pass it back verbatim** as `since_seq=next_seq` next time.
+- The `seq` a `wait_for` hit returns is a natural cursor too: then `read(since_seq=<that seq>)` continues with subsequent lines.
+- `dropped > 0` means the cursor predates the oldest buffered line, so there is permanent loss; start over from `first_seq` (or the latest).
 
-### 6.2 命令回显与设备输出分离
+### 6.2 Separating command echo from device output
 
-- 本进程发出 = `kind:"tx"`；设备返回 = `kind:"rx"`；`mark` = `kind:"mark"`。
-- `read` 的过滤：MCP `read` 支持 `filter`（正则）；若要只看 rx，用 REST/CLI 的 `kinds`，
-  或 MCP 里用 `filter` 配合文本特征。避免把回显当成设备回应。
-- `wait_for` 只匹配**发送后出现的新行**（起点=发送前最新 `seq`），天然避开旧回显。
+- Sent by this process = `kind:"tx"`; device reply = `kind:"rx"`; `mark` = `kind:"mark"`.
+- `read` filtering: MCP `read` supports `filter` (regex); to see only rx, use the REST/CLI `kinds`, or use
+  `filter` in MCP with a text feature. Avoid mistaking an echo for a device reply.
+- `wait_for` only matches **new lines that appear after the send** (start = the latest `seq` before sending),
+  naturally avoiding old echoes.
 
-### 6.3 阻塞哨兵替代 sleep 轮询
+### 6.3 Blocking sentinel instead of sleep-polling
 
-- 用 `wait_for(port, regex, timeout_ms)` 等条件成立；命中即返回，比固定 sleep + read 更快更稳。
-- **`matched:false` 是超时，不是错误**。分流：命中→消费后续；超时→`search` 排障 / `export` 留证。
+- Use `wait_for(port, regex, timeout_ms)` to wait for a condition; it returns as soon as it hits, faster and more
+  stable than fixed sleep + read.
+- **`matched:false` is a timeout, not an error**. Branch: hit -> consume subsequent lines; timeout -> `search` to
+  troubleshoot / `export` to preserve evidence.
 
-### 6.4 send + wait 一步到位
+### 6.4 send + wait in one step
 
-- `send(port, data, eol="\r\n", wait_regex="OK|ERROR", timeout_ms=5000)` 返回直接带
-  `matched` / `line` / `seq`，省一次往返。
+- `send(port, data, eol="\r\n", wait_regex="OK|ERROR", timeout_ms=5000)` returns `matched` / `line` / `seq`
+  directly, saving a round trip.
 
-### 6.5 搜索与导出
+### 6.5 Search and export
 
-- 失败定位：`search(port, "HardFault|ASSERT|panic", context=2)`。
-- 落证：`export(port, path="out/run.jsonl", format="json")`。
+- Locate failures: `search(port, "HardFault|ASSERT|panic", context=2)`.
+- Preserve evidence: `export(port, path="out/run.jsonl", format="json")`.
 
-### 6.6 桥
+### 6.6 Bridge
 
-- `tcp_bridge(action="start", port="console", mode="server", tcp_port=4001)` 把口喂给 TCP；
-  `action="status"` 看 `clients`；`action="stop"` 收尾。
+- `tcp_bridge(action="start", port="console", mode="server", tcp_port=4001)` feeds the port to TCP;
+  `action="status"` shows `clients`; `action="stop"` wraps up.
 
-### 6.7 推荐典型循环
+### 6.7 Recommended canonical loop
 
 ```
-list_ports → open(port) → snapshot（看现场）→ mark("t0")
-→ send(data, eol, wait_regex, timeout_ms) [或 send + wait_for]
-→ 成功：read(since_seq=命中seq) 按序消费
-→ 失败：search(...) → export(...)
+list_ports → open(port) → snapshot (see the state) → mark("t0")
+→ send(data, eol, wait_regex, timeout_ms) [or send + wait_for]
+→ success: read(since_seq=hit seq) consume in order
+→ failure: search(...) → export(...)
 → close(port) / tcp_bridge(stop)
 ```
 
 ---
 
-## 7. 完整示例：`wait_for` 等哨兵（端到端）
+## 7. Complete example: waiting on a sentinel with `wait_for` (end to end)
 
-场景：一个 `console` 口，agent 发 `reboot` 后等固件打印启动横幅。`loop://` 演示口下
-写出的字节会被立刻读回，因此步骤可无硬件复现（把 `demo` 换成你的真实口名即可）。
+Scenario: a `console` port; the agent sends `reboot` and waits for the firmware to print the boot banner. With the
+`loop://` demo port, written bytes are read straight back, so the steps are reproducible without hardware (swap
+`demo` for your real port name).
 
-### 第 1 步：`list_ports`（确认口与初始游标）
+### Step 1: `list_ports` (confirm the port and initial cursor)
 
 ```json
 {}
@@ -555,7 +567,7 @@ list_ports → open(port) → snapshot（看现场）→ mark("t0")
 {"ok":true,"system":[],"ports":[{"name":"demo","device":"loop://","open":true,"baud":115200,"buffer":{"count":0,"bytes":0,"first_seq":null,"last_seq":null,"dropped_total":0},"tcp_bridge":null}]}
 ```
 
-### 第 2 步：`open`（若未打开）
+### Step 2: `open` (if not already open)
 
 ```json
 { "port": "demo" }
@@ -564,7 +576,7 @@ list_ports → open(port) → snapshot（看现场）→ mark("t0")
 {"ok":true,"name":"demo","device":"loop://","open":true,"baud":115200,"buffer":{"count":0,"bytes":0,"first_seq":null,"last_seq":null,"dropped_total":0},"tcp_bridge":null}
 ```
 
-### 第 3 步：`mark`（分段）
+### Step 3: `mark` (segment)
 
 ```json
 { "port": "demo", "label": "reboot-cycle" }
@@ -573,7 +585,7 @@ list_ports → open(port) → snapshot（看现场）→ mark("t0")
 {"ok":true,"port":"demo","label":"reboot-cycle","seq":41,"ts_ms":1730000000000}
 ```
 
-### 第 4 步：`send`（下发引导命令，不等待）
+### Step 4: `send` (issue the boot command, no wait)
 
 ```json
 { "port": "demo", "data": "reboot", "eol": "\r\n" }
@@ -582,9 +594,10 @@ list_ports → open(port) → snapshot（看现场）→ mark("t0")
 {"ok":true,"port":"demo","sent_bytes":8,"sent":"reboot","waited":false,"matched":false,"line":null,"seq":null}
 ```
 
-此刻 `kind:"tx"` 的回显 `reboot` 已入缓冲（`seq` 约 42），`loop://` 随即把同样字节读回为 `kind:"rx"`。
+At this point the `kind:"tx"` echo `reboot` is already in the buffer (around `seq` 42), and `loop://` reads the same
+bytes back as `kind:"rx"`.
 
-### 第 5 步：`wait_for`（阻塞等哨兵）
+### Step 5: `wait_for` (block on the sentinel)
 
 ```json
 { "port": "demo", "regex": "reboot", "timeout_ms": 15000 }
@@ -593,11 +606,11 @@ list_ports → open(port) → snapshot（看现场）→ mark("t0")
 {"ok":true,"port":"demo","matched":true,"line":{"seq":43,"port":"demo","ts_ms":1730000000042,"text":"reboot","ansi":false,"kind":"rx"},"seq":43,"ts_ms":1730000000042,"from_seq":42}
 ```
 
-- `matched:true`，命中行 `seq=43`，`ts_ms=...042`，`from_seq=42`（发送前最新序号）。
-- **若 15s 内没等到**：`{"ok":true,"matched":false,"line":null,"seq":null,"ts_ms":null,"from_seq":42}`，
-  agent 走失败分支，不进"消费"分支。
+- `matched:true`, hit line `seq=43`, `ts_ms=...042`, `from_seq=42` (latest seq before sending).
+- **If nothing arrives within 15s**: `{"ok":true,"matched":false,"line":null,"seq":null,"ts_ms":null,"from_seq":42}`,
+  and the agent takes the failure branch instead of the "consume" branch.
 
-### 第 6 步：`read(since_seq=<命中 seq>)`（按序消费后续，无重复）
+### Step 6: `read(since_seq=<hit seq>)` (consume subsequent lines in order, no duplicates)
 
 ```json
 { "port": "demo", "since_seq": 43, "limit": 100 }
@@ -606,10 +619,10 @@ list_ports → open(port) → snapshot（看现场）→ mark("t0")
 {"ok":true,"port":"demo","lines":[],"count":0,"next_seq":43,"dropped":0,"has_more":false,"first_seq":41,"last_seq":43}
 ```
 
-真实设备上这里会返回一批 `kind:"rx"` 的启动日志（`seq` 从 44 起），
-`next_seq` 指向最后一行，供**下一次续读**继续用。**全程无重复消费**，这正是核心价值。
+On a real device this returns a batch of `kind:"rx"` boot logs (`seq` starting at 44), and `next_seq` points at
+the last line, ready for the **next resume**. **No double consumption anywhere in the flow**, which is the core value.
 
-### 第 7 步（失败分支）：`search` + `export`
+### Step 7 (failure branch): `search` + `export`
 
 ```json
 { "port": "demo", "regex": "HardFault|ASSERT|panic", "context": 2 }
@@ -624,16 +637,16 @@ list_ports → open(port) → snapshot（看现场）→ mark("t0")
 {"ok":true,"port":"demo","path":"D:\\...\\serialhub\\out\\demo.jsonl","format":"json","bytes":45120,"count":1284}
 ```
 
-> 可运行的编程式等价流程见 [`../examples/mcp_client.py`](../examples/mcp_client.py)；
-> 面向 agent 的简版 walkthrough 见 [`../examples/agent_wait_for.md`](../examples/agent_wait_for.md)。
+> See [`../examples/mcp_client.py`](../examples/mcp_client.py) for a runnable programmatic equivalent;
+> see [`../examples/agent_wait_for.md`](../examples/agent_wait_for.md) for an agent-oriented short walkthrough.
 
 ---
 
-## 8. 与 CLI 的对应关系
+## 8. Mapping to the CLI
 
-MCP 的每个工具都对应 CLI 子命令 / REST 端点，便于交叉验证：
+Every MCP tool maps to a CLI subcommand / REST endpoint, making cross-verification easy:
 
-| MCP 工具 | CLI | REST |
+| MCP tool | CLI | REST |
 |---|---|---|
 | `list_ports` | `list` / `ports` | `GET /api/ports` |
 | `open` | `open` | `POST /api/ports/{n}/open` |
@@ -650,5 +663,5 @@ MCP 的每个工具都对应 CLI 子命令 / REST 端点，便于交叉验证：
 | `clear` | `clear` | `POST /api/ports/{n}/clear` |
 | `reload` | `reload` | `POST /api/reload` |
 
-差异提示：MCP `read` **没有** `kinds` 参数（REST/CLI 有）；需要按 kind 过滤时走 REST/CLI，
-或用 MCP `read` 的 `filter` 正则近似。
+Difference note: MCP `read` has **no** `kinds` argument (REST/CLI do); when you need to filter by kind, go through
+REST/CLI, or approximate it with MCP `read`'s `filter` regex.

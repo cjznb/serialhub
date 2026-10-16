@@ -1,221 +1,225 @@
-# serialhub · 常驻串口中枢
+**English** · [简体中文](README.zh-CN.md)
+
+# serialhub · Persistent Serial Hub
 
 [![CI](https://github.com/cjznb/serialhub/actions/workflows/ci.yml/badge.svg)](https://github.com/cjznb/serialhub/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-把一个或多个串口变成**常驻、可回看、可增量读取、对 AI agent 极友好**的服务：
+Turn one or more serial ports into a **persistent, reviewable, incrementally readable** service that's **very agent-friendly**:
 
-- **守护进程**持久打开端口，逐行落进每口**环形缓冲**（全局单调 `seq` + epoch 毫秒 `ts_ms`）。
-- **Web UI**（xterm.js）实时看多个口、过滤、搜索、导出、发送。
-- **REST + WebSocket** 暴露全部能力；**CLI** 与 **MCP 服务器**共用同一份瘦客户端。
-- **TCP 桥**把某个口透传成 TCP（server 监听 / client 连出）。
-- **MCP 工具**让 agent 用 `wait_for` 阻塞等哨兵、用 `since_seq` 游标续读，**不重复消费**。
+- **The daemon** holds ports open and appends every line into a per-port **ring buffer** (global monotonic `seq` + epoch-ms `ts_ms`).
+- **Web UI** (xterm.js) watches several ports live and lets you filter, search, export, and send.
+- **REST + WebSocket** expose the whole feature set; the **CLI** and the **MCP server** share the same thin client.
+- **The TCP bridge** relays a port over TCP (server listen / client dial-out).
+- **MCP tools** let an agent block on a sentinel with `wait_for` and resume with a `since_seq` cursor, **without re-consuming**.
 
-> 设计契约（数据模型 / Hub / REST / CLI / MCP，全部冻结）见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
-> MCP 专项说明见 [`docs/MCP.md`](docs/MCP.md)。
-
----
-
-## 0. 一句话
-
-`python -m serialhub serve --config config.example.yaml` 起守护，浏览器开 `http://127.0.0.1:8765/`，
-命令行 `python -m serialhub list` / MCP `wait_for` 立刻可用；**没有硬件也能用 `loop://` 空跑全链路**。
+> The design contract (data model / Hub / REST / CLI / MCP, all frozen) is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+> The MCP-specific guide is in [`docs/MCP.md`](docs/MCP.md) (Chinese: [`docs/MCP.zh-CN.md`](docs/MCP.zh-CN.md)).
 
 ---
 
-## 1. 特性一览
+## 0. In one line
 
-| 能力 | 说明 |
+`python -m serialhub serve --config config.example.yaml` starts the daemon, then open `http://127.0.0.1:8765/`
+in a browser; both `python -m serialhub list` on the command line and MCP `wait_for` work right away.
+**You can run the entire pipeline without hardware by using `loop://`.**
+
+---
+
+## 1. Features at a glance
+
+| Capability | Description |
 |---|---|
-| 常驻多口 | 每口一个读线程，持久打开、断线按指数退避重连（**旧缓冲不丢**） |
-| 环形缓冲 | 每口按**行数 + 字节**双阈值淘汰最老行；默认 20000 行 / 8 MiB |
-| 全局序号 | `seq` 跨所有口单调递增、线程安全；`ts_ms` 为接收时刻 epoch 毫秒 |
-| 逐行类型 | `kind ∈ {rx, tx, mark}`：收到 / 本进程发出（回显）/ 标记 |
-| 无重复消费 | `read` 支持 `since_seq` / `since_ts` 游标，返回 `next_seq` 供续读 |
-| 阻塞哨兵 | `wait_for` 阻塞等某行匹配正则；**超时不是错误**（`matched:false`，仍 `ok:true`） |
-| 搜索 | `search` 正则搜全缓冲，可带上下文窗口 |
-| 导出 | raw / noansi / json(JSONL) 落盘 |
-| REST + WS | 每个 CLI 动作都有对应 REST 端点；`/ws` 推送实时行事件 |
-| Web UI | 深/浅色、多标签、ANSI 彩色、时间戳/序号、过滤/搜索、暂停/清屏、导出、发送栏 |
-| TCP 桥 | server（监听，客户端写=下发串口）/ client（连远端透传） |
-| CLI | 每个子命令输出**单行 JSON** `{"ok":true,"data":{...}}`，退出码 0/1 |
-| MCP | 14 个工具（stdio），让 agent 直接以工具调用操作串口 |
-| 热重载 | 改配置后 `serialhub reload`，增删口 / 改参数 / 重建缓冲即时生效 |
-| 无硬件演示 | `device: loop://` 直接空跑 open→send→read→wait_for |
+| Persistent multi-port | One reader thread per port; held open and reconnected with exponential backoff on disconnect (**old buffer is kept**) |
+| Ring buffer | Per port, evicts the oldest lines on a dual threshold of **line count + bytes**; default 20000 lines / 8 MiB |
+| Global sequence | `seq` is monotonic across all ports and thread-safe; `ts_ms` is the epoch-ms receive time |
+| Line kind | `kind ∈ {rx, tx, mark}`: received / sent by this process (echo) / marker |
+| No double consumption | `read` supports `since_seq` / `since_ts` cursors and returns `next_seq` for resuming |
+| Blocking sentinel | `wait_for` blocks until a line matches a regex; **a timeout is not an error** (`matched:false`, still `ok:true`) |
+| Search | `search` runs a regex over the whole buffer, optionally with a context window |
+| Export | raw / noansi / json (JSONL) to disk |
+| REST + WS | Every CLI action has a matching REST endpoint; `/ws` pushes live line events |
+| Web UI | Dark/light, multi-tab, ANSI color, timestamps/seq, filter/search, pause/clear, export, send bar |
+| TCP bridge | server (listen; client writes go down to the serial port) / client (dial a remote and relay) |
+| CLI | Every subcommand prints a **single line of JSON** `{"ok":true,"data":{...}}`, exit code 0/1 |
+| MCP | 14 tools (stdio) that let an agent drive the serial port through tool calls |
+| Hot reload | After editing config, `serialhub reload` applies added/removed ports, changed params, and rebuilt buffers immediately |
+| No-hardware demo | `device: loop://` runs the full open→send→read→wait_for loop with no hardware |
 
 ---
 
-## 2. 目录结构
+## 2. Directory layout
 
 ```
 serialhub/
-├── README.md                 # 本文件（用户手册）
+├── README.md                 # this file (user manual)
 ├── docs/
-│   ├── ARCHITECTURE.md        # 冻结契约（唯一事实来源）
-│   └── MCP.md                 # MCP 使用说明（14 工具参考 + agent 手册）
+│   ├── ARCHITECTURE.md        # the frozen contract (single source of truth)
+│   └── MCP.md                 # MCP guide (14-tool reference + agent manual)
 ├── examples/
-│   ├── config.yaml            # loop:// 演示 + 带注释的真实口
-│   ├── mcp_client.py          # 可运行的编程式客户端示例
-│   └── agent_wait_for.md      # agent 用 wait_for 等哨兵的 walkthrough
-├── config.example.yaml        # 配置样例
-├── requirements.txt           # 运行时依赖
-├── requirements-dev.txt       # 开发/测试依赖（pytest/httpx/mcp）
-├── pyproject.toml             # 打包元数据（serialhub 入口 / pytest 配置）
-├── pytest.ini                 # pytest 入口
+│   ├── config.yaml            # loop:// demo + a commented real port
+│   ├── mcp_client.py          # a runnable programmatic client example
+│   └── agent_wait_for.md      # walkthrough: an agent using wait_for on a sentinel
+├── config.example.yaml        # sample config
+├── requirements.txt           # runtime dependencies
+├── requirements-dev.txt       # dev/test dependencies (pytest/httpx/mcp)
+├── pyproject.toml             # packaging metadata (serialhub entry point / pytest config)
+├── pytest.ini                 # pytest entry
 ├── serialhub/
-│   ├── __main__.py            # python -m serialhub 入口
-│   ├── cli.py                 # 命令行（serve/list/open/read/wait/send/bridge/mcp/...）
-│   ├── client.py              # HTTP 瘦客户端（stdlib，CLI/MCP 共用）
-│   ├── mcp_server.py          # MCP 14 工具（stdio）
-│   ├── mcp_compat.py          # mcp 1.x/2.x 兼容垫片
-│   ├── server.py              # FastAPI + REST + WS + 静态 UI
-│   ├── hub.py                 # 中枢（端口/缓冲/广播/桥/等待）
-│   ├── serialport.py          # 每口读线程 + 断线重连
-│   ├── ringbuffer.py          # 每口环形缓冲（read/search）
-│   ├── tcp_bridge.py          # TCP 桥
-│   ├── exporter.py            # 导出格式化
-│   ├── config.py              # 配置模型/加载/校验
+│   ├── __main__.py            # python -m serialhub entry
+│   ├── cli.py                 # command line (serve/list/open/read/wait/send/bridge/mcp/...)
+│   ├── client.py              # HTTP thin client (stdlib, shared by CLI/MCP)
+│   ├── mcp_server.py          # the 14 MCP tools (stdio)
+│   ├── mcp_compat.py          # mcp 1.x/2.x compatibility shim
+│   ├── server.py              # FastAPI + REST + WS + static UI
+│   ├── hub.py                 # the hub (ports/buffers/broadcast/bridges/waiting)
+│   ├── serialport.py          # per-port reader thread + reconnect
+│   ├── ringbuffer.py          # per-port ring buffer (read/search)
+│   ├── tcp_bridge.py          # TCP bridge
+│   ├── exporter.py            # export formatting
+│   ├── config.py              # config model / loading / validation
 │   ├── models.py              # Line / ANSI / EOL / now_ms
-│   └── static/                # Web UI（index.html + app.js + style.css）
-├── tests/                     # 单元/集成测试
+│   └── static/                # Web UI (index.html + app.js + style.css)
+├── tests/                     # unit/integration tests
 └── tools/
-    └── mcp_smoke.py           # 自写 MCP stdio 冒烟客户端
+    └── mcp_smoke.py           # hand-written MCP stdio smoke client
 ```
 
 ---
 
-## 3. 环境要求与安装
+## 3. Requirements and install
 
-| 依赖 | 版本 | 说明 |
+| Dependency | Version | Notes |
 |---|---|---|
-| Python | 3.10+（本机实测 3.12） | 运行时与 CLI |
-| pyserial | >= 3.5 | 串口 |
+| Python | 3.10+ (3.12 verified locally) | runtime and CLI |
+| pyserial | >= 3.5 | serial ports |
 | fastapi / uvicorn[standard] | >= 0.110 / >= 0.27 | HTTP + WS |
-| pyyaml | >= 6.0 | 配置解析 |
+| pyyaml | >= 6.0 | config parsing |
 | websockets | >= 12 | uvicorn WS |
-| mcp | >= 1.9（可选） | 仅 MCP 服务器需要 |
+| mcp | >= 1.9 (optional) | needed only by the MCP server |
 
 ```powershell
-# 1) 运行时依赖（必装）
+# 1) Runtime dependencies (required)
 pip install -r requirements.txt
 
-# 2) MCP 支持（可选，装完才有 serialhub mcp）
+# 2) MCP support (optional; installs the `serialhub mcp` subcommand)
 pip install "mcp>=1.9"
-#   或直接： pip install -r requirements-dev.txt   # 含 pytest/httpx/mcp
+#   or simply: pip install -r requirements-dev.txt   # includes pytest/httpx/mcp
 
-# 3) 以源码包安装，获得 serialhub 控制台入口（可选但推荐）
+# 3) Install as a source package to get the `serialhub` console entry (optional but recommended)
 pip install -e .
 ```
 
-装完后两种等价入口：
+After installing, two equivalent entry points:
 
 ```powershell
-python -m serialhub list          # 始终可用（源码在 PYTHONPATH）
-serialhub list                    # pip install -e . 之后可用
+python -m serialhub list          # always available (source on PYTHONPATH)
+serialhub list                    # available after pip install -e .
 ```
 
 ---
 
-## 4. 快速开始
+## 4. Quick start
 
-### 4.1 无硬件演示（`loop://`）
+### 4.1 No-hardware demo (`loop://`)
 
 ```powershell
-# 用带 loop:// 演示口的配置起服务（examples/config.yaml 已备好 demo 口）
+# Start the service with a config that has a loop:// demo port (examples/config.yaml ships one)
 python -m serialhub serve --config examples/config.yaml
 ```
 
-看到 uvicorn 起来后：
+Once you see uvicorn come up:
 
 ```powershell
-# 列端口（会看到 demo 口 open=true，device=loop://）
+# List ports (you'll see the demo port open=true, device=loop://)
 python -m serialhub list
 
-# 发一条，再读回来（loop:// 会把写出的字节原样送回）
+# Send one line, then read it back (loop:// sends written bytes straight back)
 python -m serialhub send demo "hello" --eol crlf
 python -m serialhub read demo --limit 20
 
-# 阻塞等一条回应（此处 loop 立即回显，立刻命中）
+# Block until a reply arrives (here the loop echoes immediately, so it hits at once)
 python -m serialhub wait demo "hello" --timeout-ms 3000
 ```
 
-浏览器打开 <http://127.0.0.1:8765/> 即见 Web UI。
+Open <http://127.0.0.1:8765/> in a browser to see the Web UI.
 
-### 4.2 接真实串口
+### 4.2 A real serial port
 
 ```powershell
 python -m serialhub serve --config config.example.yaml
-# 命令行覆盖监听地址/端口/日志级别：
+# Override host/port/log level on the command line:
 python -m serialhub serve --config config.example.yaml --host 0.0.0.0 --port 8765 --log-level info
-# 起来后不自动打开任何口，等显式 open：
+# Start without auto-opening any port; wait for an explicit open:
 python -m serialhub serve --config config.example.yaml --no-autostart
 ```
 
 ---
 
-## 5. 配置文件详解
+## 5. Configuration reference
 
-配置为 **YAML 或 JSON**（按扩展名 `.yaml/.yml` 用 YAML，其它用 JSON）。顶层结构如下。
-逐项字段与默认值（`config.py` / `config.example.yaml` 一致）：
+Config is **YAML or JSON** (`.yaml/.yml` uses YAML by extension, anything else uses JSON). The top-level structure follows.
+Field-by-field names and defaults (consistent with `config.py` / `config.example.yaml`):
 
-### 5.1 `server`（HTTP/WS 监听与鉴权）
+### 5.1 `server` (HTTP/WS listener and auth)
 
-| 字段 | 类型 | 默认 | 说明 |
+| Field | Type | Default | Notes |
 |---|---|---|---|
-| `host` | str | `127.0.0.1` | 监听地址；`0.0.0.0` 对外 |
-| `port` | int | `8765` | 监听端口 |
-| `token` | str\|null | `null` | 非空时 `/api/*` 与 `/ws` 需 `Authorization: Bearer <token>` |
-| `cors` | bool | `true` | 是否允许跨域（开发方便） |
+| `host` | str | `127.0.0.1` | Listen address; `0.0.0.0` to expose |
+| `port` | int | `8765` | Listen port |
+| `token` | str\|null | `null` | When non-empty, `/api/*` and `/ws` require `Authorization: Bearer <token>` |
+| `cors` | bool | `true` | Whether cross-origin is allowed (handy during development) |
 
-### 5.2 `defaults`（所有口的默认参数，可被每个 `ports[]` 逐项覆盖）
+### 5.2 `defaults` (default params for every port; each `ports[]` entry can override them)
 
-| 字段 | 类型 | 默认 | 取值 / 说明 |
+| Field | Type | Default | Values / notes |
 |---|---|---|---|
-| `baud` | int | `115200` | 波特率 |
+| `baud` | int | `115200` | Baud rate |
 | `data_bits` | int | `8` | `5\|6\|7\|8` |
-| `parity` | str | `N` | `N\|E\|O\|M\|S`（大小写归一） |
+| `parity` | str | `N` | `N\|E\|O\|M\|S` (case-normalized) |
 | `stop_bits` | float | `1` | `1\|1.5\|2` |
 | `flow` | str | `none` | `none\|rtscts\|xonxoff\|dsrdtr` |
-| `dtr` | bool | `true` | 打开后是否置 DTR |
-| `rts` | bool | `true` | 打开后是否置 RTS |
-| `eol` | str | `"\r\n"` | `send` 默认结尾；也接受 `none` / `\n` / `\r` / 自定义字面量 |
-| `encoding` | str | `utf-8` | 字节解码用（errors=replace） |
-| `reconnect_ms` | int | `1000` | 断线重连初始间隔 |
-| `reconnect_max_ms` | int | `10000` | 重连退避上限 |
-| `flush_ms` | int | `50` | 无换行的残行，超过此毫秒数也作为一行吐出 |
-| `buffer_lines` | int | `20000` | 每口环形缓冲最大行数 |
-| `buffer_bytes` | int | `8388608` | 每口环形缓冲最大字节数（8 MiB） |
-| `autostart` | bool | `true` | 守护启动时是否立即打开 |
+| `dtr` | bool | `true` | Whether to raise DTR after opening |
+| `rts` | bool | `true` | Whether to raise RTS after opening |
+| `eol` | str | `"\r\n"` | Default `send` terminator; also accepts `none` / `\n` / `\r` / a custom literal |
+| `encoding` | str | `utf-8` | Used for byte decoding (errors=replace) |
+| `reconnect_ms` | int | `1000` | Initial reconnect interval on disconnect |
+| `reconnect_max_ms` | int | `10000` | Reconnect backoff ceiling |
+| `flush_ms` | int | `50` | A partial line with no newline is flushed as a line after this many ms |
+| `buffer_lines` | int | `20000` | Max lines per port ring buffer |
+| `buffer_bytes` | int | `8388608` | Max bytes per port ring buffer (8 MiB) |
+| `autostart` | bool | `true` | Whether to open immediately when the daemon starts |
 
-另有一个可选的顶层 `buffer_defaults` 段（`{lines, bytes}`）：当某口**没有**显式给出
-`buffer_lines` / `buffer_bytes` 时，用这里的值兜底。
+There is also an optional top-level `buffer_defaults` section (`{lines, bytes}`): when a port does
+**not** explicitly set `buffer_lines` / `buffer_bytes`, these values are used as the fallback.
 
-### 5.3 `ports[]`（端口列表）
+### 5.3 `ports[]` (the port list)
 
-每项至少含 `name`（唯一非空）与 `device`；其余键与 `defaults` 同名，逐项覆盖。另有：
+Each entry has at least `name` (unique, non-empty) and `device`; the remaining keys share names with
+`defaults` and override them per entry. Additional keys:
 
-| 字段 | 类型 | 说明 |
+| Field | Type | Notes |
 |---|---|---|
-| `name` | str | 逻辑口名（`list`/`open`/`read` 都用它） |
-| `device` | str | `COMx` / `/dev/ttyUSB0` / pyserial URL：`loop://`、`socket://host:port`、`rfc2217://...` |
-| `description` | str | 可选备注（自由文本）。透传到 `list_ports`/`status`/Web UI，便于辨识设备（如 `ESP32C6`） |
-| `tcp_bridge` | dict\|null | 可选：`{mode: server\|client, port: <int>, host: <str\|null>}`，守护启动时自动起桥 |
+| `name` | str | Logical port name (used by `list`/`open`/`read`) |
+| `device` | str | `COMx` / `/dev/ttyUSB0` / pyserial URL: `loop://`, `socket://host:port`, `rfc2217://...` |
+| `description` | str | Optional free-text note. Passed through to `list_ports`/`status`/Web UI to identify the device (e.g. `ESP32C6`) |
+| `tcp_bridge` | dict\|null | Optional: `{mode: server\|client, port: <int>, host: <str\|null>}`; the daemon starts the bridge automatically at boot |
 
 ### 5.4 `logging` / `ui`
 
-| 段 | 字段 | 默认 | 说明 |
+| Section | Field | Default | Notes |
 |---|---|---|---|
-| `logging` | `enabled` | `false` | 是否把每口数据滚动落盘 |
-| | `dir` | `logs` | 落盘目录 |
-| | `max_mb` | `16` | 单文件滚动阈值 |
-| | `backups` | `3` | 保留的历史文件数 |
-| `ui` | `theme` | `dark` | `dark\|light`（Web UI 默认主题） |
-| | `timestamp` | `true` | 默认是否显示每行时间戳 |
-| | `max_render_lines` | `5000` | 前端保留的最大渲染行（虚拟窗口） |
+| `logging` | `enabled` | `false` | Whether to roll per-port data to disk |
+| | `dir` | `logs` | Output directory |
+| | `max_mb` | `16` | Single-file rotation threshold |
+| | `backups` | `3` | Number of historical files to keep |
+| `ui` | `theme` | `dark` | `dark\|light` (Web UI default theme) |
+| | `timestamp` | `true` | Whether to show a per-line timestamp by default |
+| | `max_render_lines` | `5000` | Max rendered lines kept in the front end (virtual window) |
 
-### 5.5 `loop://` 无硬件演示配置
+### 5.5 `loop://` no-hardware demo config
 
-完整可运行版本见 [`examples/config.yaml`](examples/config.yaml)。最小示例：
+The full runnable version is in [`examples/config.yaml`](examples/config.yaml). Minimal example:
 
 ```yaml
 server:
@@ -230,7 +234,7 @@ defaults:
 
 ports:
   - name: demo
-    device: loop://      # pyserial 回环：写出的字节原样读回，无需硬件
+    device: loop://      # pyserial loopback: written bytes are read straight back, no hardware
     autostart: true
 
 ui:
@@ -238,128 +242,129 @@ ui:
   timestamp: true
 ```
 
-校验规则（加载即校验，非法抛 `ValueError` 且消息含字段路径如 `ports[console].data_bits`）：
-`name` 唯一非空、`device` 非空、`data_bits∈{5,6,7,8}`、`parity∈{N,E,O,M,S}`、
-`stop_bits∈{1,1.5,2}`、`flow∈{none,rtscts,xonxoff,dsrdtr}`、`buffer_lines>0`、`buffer_bytes>0`。
+Validation rules (validated on load; an invalid config raises `ValueError` with a message that includes
+the field path, such as `ports[console].data_bits`):
+`name` unique and non-empty, `device` non-empty, `data_bits∈{5,6,7,8}`, `parity∈{N,E,O,M,S}`,
+`stop_bits∈{1,1.5,2}`, `flow∈{none,rtscts,xonxoff,dsrdtr}`, `buffer_lines>0`, `buffer_bytes>0`.
 
 ---
 
-## 6. Web UI 用法
+## 6. Web UI
 
-打开 `http://127.0.0.1:8765/`。深色为主，右上角可切浅色。
+Open `http://127.0.0.1:8765/`. Dark by default, with a light toggle in the top-right corner.
 
-| 区域 | 功能 |
+| Area | Function |
 |---|---|
-| 顶栏统计 | 端口数 / open 数 / uptime |
-| 连接状态 | `live` / `connecting` / `reconnecting` / `unauthorized` 状态灯 |
-| token 输入框 | 服务端设了 `token` 时，在此填 Bearer token（存 localStorage） |
-| 标签页 | 多口标签，每标签带**状态点**与波特率 |
-| 终端 | xterm.js 渲染 **ANSI 彩色**；CDN 不可用时**降级为纯文本**（去 ANSI）并给横幅提示 |
-| 每行前缀 | 时间戳（可关）+ 序号 `seq`；`tx` 前缀 `▸`、`mark` 前缀 `⚑` |
-| Pause | 暂停实时渲染（新行进缓冲，Resume 后补渲） |
-| Autoscroll | 自动滚到最新行开关 |
-| Time | 每行时间戳开关 |
-| Clear | 清空本地视图 |
-| filter | 客户端正则**实时过滤**（`error\|warn`），非法正则会标红 |
-| search | 回车执行本地搜索并高亮，`↑`/`↓` 在命中间跳转，显示 `命中/总数` |
-| hist | 调**服务端全历史**搜索，结果可点行跳转 |
-| export | 导出该口缓冲：`raw` / `noansi` / `json`（服务端写文件） |
-| 发送栏 | 选目标口 + 输入 + EOL(CRLF/LF/CR/none) + Send；`↑`/`↓` 翻发送历史 |
-| 端口头 | 设备名 / 波特率 / 状态；右侧 lines/s、B/s、buffer 占用百分比与迷你速率图 |
+| Top-bar stats | Port count / open count / uptime |
+| Connection status | `live` / `connecting` / `reconnecting` / `unauthorized` status light |
+| token field | When the server sets a `token`, enter the Bearer token here (stored in localStorage) |
+| Tabs | One tab per port, each with a **status dot** and baud rate |
+| Terminal | xterm.js renders **ANSI color**; when the CDN is unavailable it **degrades to plain text** (ANSI stripped) with a banner notice |
+| Per-line prefix | Timestamp (toggleable) + sequence `seq`; `tx` prefix `▸`, `mark` prefix `⚑` |
+| Pause | Pause live rendering (new lines still buffer; Resume catches up) |
+| Autoscroll | Toggle auto-scroll to the newest line |
+| Time | Toggle the per-line timestamp |
+| Clear | Clear the local view |
+| filter | Client-side regex **live filter** (`error\|warn`); an invalid regex is highlighted red |
+| search | Press Enter to run a local search and highlight hits; `↑`/`↓` jump between hits; shows `hits/total` |
+| hist | Search the **full server history**; results are clickable to jump to the line |
+| export | Export this port's buffer: `raw` / `noansi` / `json` (the server writes the file) |
+| Send bar | Pick target port + input + EOL (CRLF/LF/CR/none) + Send; `↑`/`↓` cycle send history |
+| Port header | Device name / baud / status; on the right, lines/s, B/s, buffer-fill percentage, and a mini rate chart |
 
-> UI 通过 `/api/*` 与 `/ws` 工作；WS 首帧推 `hello`（端口概览），随后推 `line` / `status` / `mark` 事件。
+> The UI works over `/api/*` and `/ws`; the first WS frame pushes `hello` (port overview), then it pushes `line` / `status` / `mark` events.
 
 ---
 
-## 7. CLI 用法
+## 7. CLI usage
 
-CLI 是**瘦客户端**：除 `serve` / `mcp` 外，每个子命令打印**恰好一行 JSON**：
+The CLI is a **thin client**: except for `serve` / `mcp`, every subcommand prints **exactly one line of JSON**:
 
 ```json
 {"ok": true, "data": { ... }}
 ```
 ```json
-{"ok": false, "error": "<可读消息>"}
+{"ok": false, "error": "<readable message>"}
 ```
 
-退出码：`0`=成功，`1`=失败。全局参数：`--url`（默认 `http://127.0.0.1:8765`）、`--token`（或环境变量 `SERIALHUB_TOKEN`）。
+Exit codes: `0`=success, `1`=failure. Global options: `--url` (default `http://127.0.0.1:8765`), `--token` (or the `SERIALHUB_TOKEN` environment variable).
 
-### 7.1 子命令表
+### 7.1 Subcommand table
 
-| 子命令 | 参数 | 对应 REST | 说明 |
+| Subcommand | Args | Matching REST | Notes |
 |---|---|---|---|
-| `serve` | `--config F` `[--host]` `[--port]` `[--no-autostart]` `[--log-level]` | (本地) | 运行守护（不打印 JSON） |
-| `list`（别名 `ports`） | — | `GET /api/ports` | 列系统串口 + 已配置端口 |
-| `status` | `[NAME]` | `GET /api/status` | 整体或单口状态 |
-| `open` | `NAME` `[--baud]` `[--device]` | `POST /api/ports/{n}/open` | 打开（可覆盖波特率/设备） |
-| `close` | `NAME` | `POST /api/ports/{n}/close` | 关闭（保留缓冲） |
-| `read` | `NAME` `[--since-seq]` `[--since-ts]` `[--filter]` `[--limit]` `[--strip-ansi]` `[--kinds]` | `GET .../read` | 增量读缓冲行 |
-| `search` | `NAME REGEX` `[--context]` `[--since-seq]` `[--limit]` | `GET .../search` | 正则搜索（可带上下文） |
-| `wait` | `NAME REGEX` `[--timeout-ms]` `[--since-seq]` | `GET .../wait` | 阻塞等一条匹配（超时非错） |
-| `send` | `NAME DATA` `[--eol]` `[--wait-regex]` `[--timeout-ms]` | `POST .../send` | 发数据（追加 EOL），可选等回应 |
-| `snapshot` | `NAME` `[--tail-lines]` | `GET .../snapshot` | 取缓冲末尾 N 行 |
-| `export` | `NAME` `[--path]` `[--format raw\|noansi\|json]` `[--range]` | `POST .../export` | 导出缓冲到文件 |
-| `mark` | `NAME LABEL` | `POST .../mark` | 插入标记行 |
-| `clear` | `NAME` | `POST .../clear` | 清空该口缓冲 |
-| `bridge` | `{start,stop,status}` `--port NAME` `[--mode server\|client]` `[--tcp-port]` `[--host]` | `POST /api/bridge` | 起停/查看 TCP 桥 |
-| `reload` | — | `POST /api/reload` | 热重载配置 |
-| `mcp` | `[--stdio]` `[--transport]` | (MCP) | 运行 MCP 服务器 |
+| `serve` | `--config F` `[--host]` `[--port]` `[--no-autostart]` `[--log-level]` | (local) | Run the daemon (prints no JSON) |
+| `list` (alias `ports`) | - | `GET /api/ports` | List system serial ports + configured ports |
+| `status` | `[NAME]` | `GET /api/status` | Overall or single-port status |
+| `open` | `NAME` `[--baud]` `[--device]` | `POST /api/ports/{n}/open` | Open (optionally override baud/device) |
+| `close` | `NAME` | `POST /api/ports/{n}/close` | Close (buffer kept) |
+| `read` | `NAME` `[--since-seq]` `[--since-ts]` `[--filter]` `[--limit]` `[--strip-ansi]` `[--kinds]` | `GET .../read` | Incrementally read buffered lines |
+| `search` | `NAME REGEX` `[--context]` `[--since-seq]` `[--limit]` | `GET .../search` | Regex search (optionally with context) |
+| `wait` | `NAME REGEX` `[--timeout-ms]` `[--since-seq]` | `GET .../wait` | Block until one line matches (timeout is not an error) |
+| `send` | `NAME DATA` `[--eol]` `[--wait-regex]` `[--timeout-ms]` | `POST .../send` | Send data (EOL appended), optionally wait for a reply |
+| `snapshot` | `NAME` `[--tail-lines]` | `GET .../snapshot` | Fetch the last N buffered lines |
+| `export` | `NAME` `[--path]` `[--format raw\|noansi\|json]` `[--range]` | `POST .../export` | Export the buffer to a file |
+| `mark` | `NAME LABEL` | `POST .../mark` | Insert a marker line |
+| `clear` | `NAME` | `POST .../clear` | Clear that port's buffer |
+| `bridge` | `{start,stop,status}` `--port NAME` `[--mode server\|client]` `[--tcp-port]` `[--host]` | `POST /api/bridge` | Start/stop/inspect the TCP bridge |
+| `reload` | - | `POST /api/reload` | Hot-reload the config |
+| `mcp` | `[--stdio]` `[--transport]` | (MCP) | Run the MCP server |
 
-参数细节：
+Argument details:
 
-- `read` 游标优先 `--since-seq`，其次 `--since-ts`；都没有则按 `--limit` 取末尾。`--kinds` 逗号分隔（`rx,tx,mark`）。
-- `search` 的 `regex` 与 `read` 的 `--filter` 不同名（前者定位命中、支持上下文，后者只筛选）。
-- `send` 的 `DATA` 传 `-` 时从 stdin 读（去掉一个尾随换行）；`--eol` 接受 `crlf|lf|cr|none` 或转义字面量，缺省取该口 `eol`。
-- `wait` / `send` 的超时单位是**毫秒**（`--timeout-ms`）。
+- `read` prefers the `--since-seq` cursor, then `--since-ts`; if neither is given it takes the tail by `--limit`. `--kinds` is comma-separated (`rx,tx,mark`).
+- `search`'s `regex` and `read`'s `--filter` are different names (the former locates hits and supports context; the latter only filters).
+- `send`'s `DATA` reads from stdin when passed `-` (one trailing newline is stripped); `--eol` accepts `crlf|lf|cr|none` or an escaped literal, defaulting to that port's `eol`.
+- The timeout unit for `wait` / `send` is **milliseconds** (`--timeout-ms`).
 
-### 7.2 常用示例
+### 7.2 Common examples
 
 ```powershell
-# 列端口 / 看状态
+# List ports / check status
 python -m serialhub list
 python -m serialhub status
 python -m serialhub status console
 
-# 打开（覆盖波特率）与关闭
+# Open (override baud) and close
 python -m serialhub open console --baud 921600
 python -m serialhub close console
 
-# 增量读取：从 0 开始，最多 50 行，仅 rx
+# Incremental read: from 0, at most 50 lines, rx only
 python -m serialhub read console --since-seq 0 --limit 50 --kinds rx
-# 只看含 error/warn 的行、去 ANSI
+# Only lines containing error/warn, ANSI stripped
 python -m serialhub read console --filter "error|warn" --strip-ansi
 
-# 搜索带上下文
+# Search with context
 python -m serialhub search console "Bootloader" --context 2
 
-# 阻塞等哨兵（15s）
+# Block on a sentinel (15s)
 python -m serialhub wait console "Bootloader" --timeout-ms 15000
 
-# 发命令并等回应
+# Send a command and wait for the reply
 python -m serialhub send console "reboot" --eol crlf --wait-regex "Bootloader" --timeout-ms 15000
 
-# 从 stdin 发
+# Send from stdin
 "ls -la" | python -m serialhub send console - --eol lf
 
-# 快照 / 导出 / 标记 / 清空
+# Snapshot / export / mark / clear
 python -m serialhub snapshot console --tail-lines 100
 python -m serialhub export console --format json --path out/console.jsonl
 python -m serialhub mark console "before-reset"
 python -m serialhub clear console
 
-# 热重载
+# Hot reload
 python -m serialhub reload
 ```
 
-### 7.3 返回 envelope 示例
+### 7.3 Return envelope example
 
-`python -m serialhub wait demo "hello" --timeout-ms 3000`：
+`python -m serialhub wait demo "hello" --timeout-ms 3000`:
 
 ```json
 {"ok": true, "data": {"port": "demo", "matched": true, "line": {"seq": 7, "port": "demo", "ts_ms": 1730000000123, "text": "hello", "ansi": false, "kind": "rx"}, "seq": 7, "ts_ms": 1730000000123, "from_seq": 5}}
 ```
 
-失败（例如口不存在）：
+On failure (for example, a port that doesn't exist):
 
 ```json
 {"ok": false, "error": "unknown port: 'nope'"}
@@ -367,66 +372,69 @@ python -m serialhub reload
 
 ---
 
-## 8. TCP 桥用法
+## 8. TCP bridge usage
 
-把某个口透传成 TCP：客户端写进 TCP 的字节会下发串口（并以 `kind=tx` 入缓冲），
-串口收到的行会（带该口 `eol`）回写给所有 TCP 客户端。
+Relay a port over TCP: bytes a client writes to TCP are sent down to the serial port (and buffered with
+`kind=tx`), while lines the serial port receives are written back to every TCP client (with that port's `eol`).
 
-| 模式 | 行为 | 必填 |
+| Mode | Behavior | Required |
 |---|---|---|
-| `server` | 监听 `<host>:<tcp_port>`（默认 `127.0.0.1`；传 `--host 0.0.0.0` 对外），多客户端 | `--tcp-port` |
-| `client` | 连出到 `host:<tcp_port>`，断线指数退避重连 | `--tcp-port` + `--host` |
+| `server` | Listen on `<host>:<tcp_port>` (default `127.0.0.1`; pass `--host 0.0.0.0` to expose), multi-client | `--tcp-port` |
+| `client` | Dial out to `host:<tcp_port>`, reconnecting with exponential backoff on disconnect | `--tcp-port` + `--host` |
 
 ```powershell
-# server 模式：把 console 暴露到本机 TCP 4001
+# server mode: expose console on local TCP 4001
 python -m serialhub bridge start --port console --mode server --tcp-port 4001
 python -m serialhub bridge status --port console
 #   -> {"ok":true,"data":{"port":"console","mode":"server","tcp_port":4001,"host":null,"active":true}}
 python -m serialhub bridge stop --port console
 
-# server 模式对外（跨机 nc）：绑定 0.0.0.0
+# server mode, exposed (cross-machine nc): bind 0.0.0.0
 python -m serialhub bridge start --port console --mode server --tcp-port 4001 --host 0.0.0.0
 
-# client 模式：连远端串口-over-TCP 服务并透传到本口
+# client mode: connect a remote serial-over-TCP service and relay it to this port
 python -m serialhub bridge start --port console --mode client --host 192.168.1.50 --tcp-port 4001
 ```
 
-用 `nc`（或 `ncat`）连上后即可当串口用：
+Connect with `nc` (or `ncat`) and use it like a serial port:
 
 ```powershell
-# 本机（PowerShell 若无 nc，可用 ncat 或 Test-NetConnection 佐证端口可达）
+# Local (if PowerShell has no nc, use ncat or Test-NetConnection to confirm reachability)
 nc 127.0.0.1 4001
-# 之后输入的内容会下发串口；串口回行会显示在这里
+# Anything you type now goes down to the serial port; lines coming back show up here
 ```
 
-> 注意：**server 模式默认只绑定回环 `127.0.0.1`**；传 `--host 0.0.0.0`（或 REST/MCP 的 `host` 字段）即可对外监听（跨机 `nc`）。
-> 跨机时记得在 Windows 防火墙放行该 TCP 端口。也可在配置里用 `tcp_bridge:{mode,port,host}` 让守护启动时自动起桥（见 §5.3）。
+> Note: **server mode binds only to loopback `127.0.0.1` by default**; pass `--host 0.0.0.0` (or the REST/MCP `host` field)
+> to listen externally (cross-machine `nc`).
+> For cross-machine access, remember to allow that TCP port in the Windows firewall. You can also use `tcp_bridge:{mode,port,host}`
+> in the config to have the daemon start the bridge at boot (see §5.3).
 
 ---
 
-## 9. MCP 用法
+## 9. MCP usage
 
-MCP 服务器让 agent **以工具调用**（而非 shell）操作串口。它是**瘦客户端**：每个工具都通过 HTTP
-调用常驻守护，所以**必须先 `serve`**。transport 为 **stdio**（opencode / Claude Desktop / Cursor 的通用本地方式）。
+The MCP server lets an agent drive serial ports **through tool calls** (rather than a shell). It is a **thin client**:
+every tool calls the persistent daemon over HTTP, so you **must `serve` first**. The transport is **stdio**
+(the common local approach for opencode / Claude Desktop / Cursor).
 
-> 完整的 14 工具逐项参考、agent 操作手册、错误约定与序列图见 [`docs/MCP.md`](docs/MCP.md)。
+> The complete 14-tool reference, agent playbook, error conventions, and sequence diagram are in [`docs/MCP.md`](docs/MCP.md).
 
-### 9.1 启动
+### 9.1 Launch
 
 ```powershell
-# 方式一：模块入口（推荐）
+# Option 1: module entry (recommended)
 python -m serialhub mcp --stdio
 
-# 方式二：直接跑脚本（注册 config 里常用的写法）
+# Option 2: run the script directly (the form commonly used in registered configs)
 python serialhub/mcp_server.py
 
-# 方式三：CLI 子命令
+# Option 3: CLI subcommand
 python -m serialhub mcp --transport stdio
 ```
 
-### 9.2 注册到客户端
+### 9.2 Register with a client
 
-**opencode**（合并进你的配置）：
+**opencode** (merge into your config):
 
 ```jsonc
 "mcp": {
@@ -439,23 +447,9 @@ python -m serialhub mcp --transport stdio
 }
 ```
 
-等价的模块写法：`"command": ["python", "-m", "serialhub", "mcp", "--stdio"]`。
+The equivalent module form: `"command": ["python", "-m", "serialhub", "mcp", "--stdio"]`.
 
-**Claude Desktop**（`claude_desktop_config.json`）：
-
-```json
-{
-  "mcpServers": {
-    "serialhub": {
-      "command": "python",
-      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
-      "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
-    }
-  }
-}
-```
-
-**Cursor**（`.cursor/mcp.json`）：
+**Claude Desktop** (`claude_desktop_config.json`):
 
 ```json
 {
@@ -469,18 +463,32 @@ python -m serialhub mcp --transport stdio
 }
 ```
 
-环境变量：`SERIALHUB_URL`（守护基址，默认 `http://127.0.0.1:8765`）、`SERIALHUB_TOKEN`（守护设了 token 时）。
+**Cursor** (`.cursor/mcp.json`):
 
-### 9.3 工具速查表（14 个）
+```json
+{
+  "mcpServers": {
+    "serialhub": {
+      "command": "python",
+      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+      "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
+    }
+  }
+}
+```
 
-所有工具成功返回 `{"ok": true, ...}`，失败返回 `{"ok": false, "error": "..."}`。
+Environment variables: `SERIALHUB_URL` (daemon base, default `http://127.0.0.1:8765`), `SERIALHUB_TOKEN` (when the daemon sets a token).
 
-| 工具 | 参数 | 返回关键字段 |
+### 9.3 Tool cheat sheet (14)
+
+Every tool returns `{"ok": true, ...}` on success and `{"ok": false, "error": "..."}` on failure.
+
+| Tool | Args | Key return fields |
 |---|---|---|
-| `list_ports` | — | `system[]`, `ports[]` |
-| `open` | `port, baud=115200, device=None` | 端口 dict（`open:true`, `buffer`, ...） |
-| `close` | `port` | 端口 dict（`open:false`） |
-| `status` | `port=None` | `server`+`ports[]` 或单口 |
+| `list_ports` | - | `system[]`, `ports[]` |
+| `open` | `port, baud=115200, device=None` | port dict (`open:true`, `buffer`, ...) |
+| `close` | `port` | port dict (`open:false`) |
+| `status` | `port=None` | `server`+`ports[]` or a single port |
 | `read` | `port, since_seq=None, since_ts=None, filter=None, limit=None, strip_ansi=False` | `lines[]`, `next_seq`, `count`, `dropped`, `has_more` |
 | `search` | `port, regex, context=0, since_seq=None, limit=None` | `hits[]`, `count`, `next_seq` |
 | `wait_for` | `port, regex, timeout_ms=10000, since_seq=None` | `matched`, `line`, `seq`, `ts_ms`, `from_seq` |
@@ -490,25 +498,25 @@ python -m serialhub mcp --transport stdio
 | `tcp_bridge` | `action, port, tcp_port=None, mode="server", host=None` | `active`, `mode`, `tcp_port` |
 | `mark` | `port, label` | `seq`, `ts_ms` |
 | `clear` | `port` | `cleared` |
-| `reload` | — | `added`/`removed`/`restarted`/`updated` |
+| `reload` | - | `added`/`removed`/`restarted`/`updated` |
 
-回环演示：
+Loopback demo:
 
 ```powershell
-python -m serialhub serve --config examples/config.yaml   # demo 口 device=loop://
-python tools/mcp_smoke.py                                  # initialize + tools/list（无需守护）
-python tools/mcp_smoke.py --full --tool-timeout 30         # 再跑 list_ports（需守护）
+python -m serialhub serve --config examples/config.yaml   # demo port device=loop://
+python tools/mcp_smoke.py                                  # initialize + tools/list (no daemon needed)
+python tools/mcp_smoke.py --full --tool-timeout 30         # then run list_ports (needs the daemon)
 ```
 
-### 9.4 示例对话：用 `wait_for` 等哨兵（核心价值）
+### 9.4 Example dialogue: waiting on a sentinel with `wait_for` (the core value)
 
-`loop://` 演示口下，agent 与守护的真实 tool-call 往返：
+With the `loop://` demo port, a real tool-call round trip between an agent and the daemon:
 
 **Agent → `open`**
 ```json
 { "port": "demo" }
 ```
-返回（节选）：
+Returns (excerpt):
 ```json
 {"ok":true,"name":"demo","device":"loop://","open":true,"baud":115200,"buffer":{"count":0,"first_seq":null,"last_seq":null,"dropped_total":0},"tcp_bridge":null}
 ```
@@ -529,7 +537,7 @@ python tools/mcp_smoke.py --full --tool-timeout 30         # 再跑 list_ports�
 {"ok":true,"port":"demo","sent_bytes":8,"sent":"reboot","waited":false,"matched":false,"line":null,"seq":null}
 ```
 
-对 `loop://`，写出的 8 字节会立刻被读回（`reboot` + CRLF）。于是下面这一步会**立即命中**：
+For `loop://`, the 8 written bytes are read straight back (`reboot` + CRLF). So the next step **hits immediately**:
 
 **Agent → `wait_for`**
 ```json
@@ -539,7 +547,7 @@ python tools/mcp_smoke.py --full --tool-timeout 30         # 再跑 list_ports�
 {"ok":true,"port":"demo","matched":true,"line":{"seq":43,"port":"demo","ts_ms":1730000000042,"text":"reboot","ansi":false,"kind":"rx"},"seq":43,"ts_ms":1730000000042,"from_seq":42}
 ```
 
-拿到命中行的 `seq`（此处 `43`）后，用**游标续读**后续行，**不重复**：
+Once you have the hit line's `seq` (here `43`), use the **cursor to resume** subsequent lines **without duplicates**:
 
 **Agent → `read`**
 ```json
@@ -549,78 +557,84 @@ python tools/mcp_smoke.py --full --tool-timeout 30         # 再跑 list_ports�
 {"ok":true,"port":"demo","lines":[],"count":0,"next_seq":43,"dropped":0,"has_more":false,"first_seq":41,"last_seq":43}
 ```
 
-真实设备上，`wait_for("console","Bootloader",15000)` 会**阻塞**直到固件打印启动横幅，
-返回命中行的 `seq`/`ts_ms`；随后 `read(since_seq=<该 seq>)` 按序消费后续启动日志，**零重复**。
-**超时不是错误**：15s 内没等到就返回 `{"ok":true,"matched":false,...}`，agent 可据此走失败分支（如 `search` 查崩溃日志、`export` 落盘）。
+On a real device, `wait_for("console","Bootloader",15000)` **blocks** until the firmware prints the boot
+banner, returning the hit line's `seq`/`ts_ms`; then `read(since_seq=<that seq>)` consumes subsequent boot
+logs in order, with **zero duplicates**.
+**A timeout is not an error**: if nothing arrives within 15s it returns `{"ok":true,"matched":false,...}`, and
+the agent can branch on that (e.g. `search` for a crash log, `export` to disk).
 
-完整 walkthrough 见 [`examples/agent_wait_for.md`](examples/agent_wait_for.md)；
-可运行代码见 [`examples/mcp_client.py`](examples/mcp_client.py)。
-
----
-
-## 10. 与 Agent 集成（推荐模式）
-
-1. **用游标做增量，不重复消费**
-   每次 `read` 返回 `next_seq`，下次把它作为 `since_seq` 传入即可接着读；`wait_for` 命中的 `seq`
-   也是天然游标。`dropped > 0` 表示游标早于缓冲最老行（有永久丢失，需从 `first_seq` 续）。
-
-2. **命令回显与设备输出分离**
-   本进程发出的内容以 `kind="tx"` 入缓冲，设备返回以 `kind="rx"`。`read` 可用 `kinds:["rx"]`
-   （REST/CLI 的 `--kinds`）只看设备输出，避免把回显当回应。
-
-3. **阻塞哨兵替代 sleep 轮询**
-   `wait_for(port, regex, timeout_ms)` 在服务端阻塞（MCP 侧跑在工作线程，不卡事件循环），
-   命中即返回；比"固定 sleep + read"更快更稳。**超时是 `matched:false` 的正常结果**。
-
-4. **批量 send + wait**
-   一次 `send(data, wait_regex=..., timeout_ms=...)` 就完成"发命令 + 等回应"，返回里直接带
-   `matched` / `line` / `seq`。多步流程按顺序调用即可（每步以返回的 `seq` 作为下一步 `since_seq`）。
-
-5. **失败取证**
-   超时后用 `search(port, "HardFault|ASSERT|panic", context=2)` 定位，
-   再用 `export(port, path="out/xxx.jsonl", format="json")` 落盘整段缓冲。
-
-6. **标记分段**
-   在关键动作前 `mark(port, "before-reset")`，之后用 `search` 或 `read` 快速定位阶段边界。
+See [`examples/agent_wait_for.md`](examples/agent_wait_for.md) for the full walkthrough;
+see [`examples/mcp_client.py`](examples/mcp_client.py) for runnable code.
 
 ---
 
-## 11. 测试与自检
+## 10. Integrating with an agent (recommended patterns)
+
+1. **Use a cursor to read incrementally, without re-consuming**
+   Every `read` returns `next_seq`; pass it back as `since_seq` next time to continue; the `seq` a `wait_for`
+   hit returns is a natural cursor too. `dropped > 0` means the cursor predates the oldest buffered line (there is
+   permanent loss; resume from `first_seq`).
+
+2. **Separate command echo from device output**
+   Content this process sends is buffered with `kind="tx"`, device replies with `kind="rx"`. `read` can use
+   `kinds:["rx"]` (the REST/CLI `--kinds`) to see only device output, avoiding mistaking an echo for a reply.
+
+3. **Block on a sentinel instead of sleep-polling**
+   `wait_for(port, regex, timeout_ms)` blocks server-side (on the MCP side it runs on a worker thread and doesn't
+   stall the event loop) and returns as soon as it hits; it's faster and more stable than "fixed sleep + read".
+   **A timeout is a normal result, `matched:false`.**
+
+4. **Batch send + wait**
+   A single `send(data, wait_regex=..., timeout_ms=...)` does "send command + wait for reply" and returns
+   `matched` / `line` / `seq` directly. Chain multi-step flows in order (each step uses the returned `seq` as the
+   next step's `since_seq`).
+
+5. **Post-failure forensics**
+   After a timeout, locate with `search(port, "HardFault|ASSERT|panic", context=2)`, then dump the whole buffer
+   with `export(port, path="out/xxx.jsonl", format="json")`.
+
+6. **Segment with markers**
+   Before a key action, `mark(port, "before-reset")`; afterward use `search` or `read` to quickly find phase boundaries.
+
+---
+
+## 11. Tests and self-checks
 
 ```powershell
-# 单元/集成测试（入口见 pytest.ini 与 pyproject.toml，测试位于 tests/；当前 73 项全部通过）
+# Unit/integration tests (entries in pytest.ini and pyproject.toml; tests live in tests/; currently 73 pass)
 pip install -r requirements-dev.txt
 python -m pytest -q
 
-# MCP 协议自检（自写 stdio JSON-RPC 客户端，不需要守护）
+# MCP protocol self-check (hand-written stdio JSON-RPC client, no daemon needed)
 python tools/mcp_smoke.py
 
-# 端到端冒烟（需要守护在跑）：initialize + tools/list(14) + list_ports
-python -m serialhub serve --config examples/config.yaml   # 另一个终端
+# End-to-end smoke (needs the daemon running): initialize + tools/list(14) + list_ports
+python -m serialhub serve --config examples/config.yaml   # in another terminal
 python tools/mcp_smoke.py --full --tool-timeout 30
 ```
 
 ---
 
-## 12. 验收证据
+## 12. Acceptance evidence
 
-本项目在 `loop://` 上完成了一次**端到端验收（29/29 全通过）**，覆盖以下方法论（可复现）：
+This project completed an **end-to-end acceptance run (29/29 passing)** over `loop://`, covering the
+following methodology (reproducible):
 
-| 用例 | 断言要点 |
+| Case | Assertion |
 |---|---|
-| `open` → `send` → `read` | 回环收到所发字节；游标续读**无重复** |
-| `wait_for` 立即命中 | `matched:true` 且返回命中行 `seq`/`ts_ms` |
-| `wait_for` 超时 | `matched:false` 且 `ok:true`（**非错误**） |
-| `search` | 命中集合正确、`next_seq` 正确 |
-| `snapshot` | 返回末尾 N 行且计数一致 |
-| `mark` | 标记行入缓冲，`seq`/`ts_ms` 有效 |
-| `export` | 文件真实写出，`bytes`/`count` 一致 |
-| TCP 桥往返 | 经 TCP 写→串口→回写 TCP 的线上往返成功 |
-| CLI `list` / `read` | 单行 JSON envelope，退出码 0 |
-| MCP `initialize` + `tools/list` | 返回 **14** 个工具 |
-| MCP `send` + `wait_for` | 哨兵命中（`matched:true`） |
+| `open` → `send` → `read` | The loopback receives the sent bytes; cursor resume has **no duplicates** |
+| `wait_for` immediate hit | `matched:true` and returns the hit line's `seq`/`ts_ms` |
+| `wait_for` timeout | `matched:false` and `ok:true` (**not an error**) |
+| `search` | Hit set correct, `next_seq` correct |
+| `snapshot` | Returns the last N lines with a matching count |
+| `mark` | Marker line buffered, `seq`/`ts_ms` valid |
+| `export` | File truly written, `bytes`/`count` match |
+| TCP bridge round trip | A wire round trip TCP write → serial → TCP write-back succeeds |
+| CLI `list` / `read` | Single-line JSON envelope, exit code 0 |
+| MCP `initialize` + `tools/list` | Returns **14** tools |
+| MCP `send` + `wait_for` | Sentinel hit (`matched:true`) |
 
-一键复跑：
+Rerun with one command:
 
 ```powershell
 python -m serialhub serve --config examples/config.yaml
@@ -633,40 +647,40 @@ python tools/mcp_smoke.py --full
 
 ---
 
-## 13. 常见问题
+## 13. FAQ
 
-| 现象 | 根因 | 处置 |
+| Symptom | Root cause | Fix |
 |---|---|---|
-| CLI/MCP 报 `connection failed` | 守护没起 / 换了端口 | 先 `serve`；确认 `--url` 或 `SERIALHUB_URL` 指向正确基址 |
-| Web UI 一直 `reconnecting` | 守护未起，或防火墙/代理 | 看 uvicorn 是否在监听；本机用 `127.0.0.1` 直连 |
-| 浏览器/远端连不上 8765 | Windows 防火墙拦截入站 | 放行 TCP 8765：`New-NetFirewallRule -DisplayName "serialhub 8765" -Direction Inbound -Protocol TCP -LocalPort 8765 -Action Allow` |
-| 所有 `/api/*` 返回 401 | 服务端设了 `token` | CLI/MCP 传 `--token` / `SERIALHUB_TOKEN`；UI 顶栏填 token |
-| 串口断线后没数据 | 设备拔插，worker 在退避重连 | 看 `status` 的 `last_error` / `reconnect_count`；重连后**旧缓冲保留** |
-| `serve` 报端口占用 | 8765 被占用 | 改 `--port` 或配置 `server.port`；同步改 `SERIALHUB_URL` |
-| `open` 报打不开设备 | 设备名错 / 被占用 | 用 `list` 看 `system[]` 的真实 `device`；确认没被别的程序占用 |
-| 想无硬件试全链路 | — | 用 `device: loop://`（见 `examples/config.yaml`） |
-| `send` 中文乱码 | 编码不匹配 | 配置该口 `encoding`；解析端按同编码 |
-| `wait_for` 一直等到超时 | 哨兵没出现 / 正则不对 | 先用 `snapshot`/`search` 看已有输出，再调正则；超时是正常返回，不是错误 |
+| CLI/MCP reports `connection failed` | Daemon not started / wrong port | `serve` first; confirm `--url` or `SERIALHUB_URL` points at the right base |
+| Web UI stuck on `reconnecting` | Daemon not running, or firewall/proxy | Check whether uvicorn is listening; on the local machine, connect via `127.0.0.1` directly |
+| Browser/remote can't reach 8765 | Windows firewall blocking inbound | Allow TCP 8765: `New-NetFirewallRule -DisplayName "serialhub 8765" -Direction Inbound -Protocol TCP -LocalPort 8765 -Action Allow` |
+| All `/api/*` return 401 | The server sets a `token` | Pass `--token` / `SERIALHUB_TOKEN` to CLI/MCP; enter the token in the UI top bar |
+| No data after a serial disconnect | Device unplugged/replugged, worker is backoff-reconnecting | Check `status`'s `last_error` / `reconnect_count`; after reconnect the **old buffer is kept** |
+| `serve` reports the port is in use | 8765 is occupied | Change `--port` or `server.port` in the config; update `SERIALHUB_URL` to match |
+| `open` reports the device can't be opened | Wrong device name / already in use | Use `list` to see the real `device` in `system[]`; confirm no other program holds it |
+| Want to try the full pipeline without hardware | - | Use `device: loop://` (see `examples/config.yaml`) |
+| `send` shows garbled CJK | Encoding mismatch | Set that port's `encoding`; have the parsing side use the same encoding |
+| `wait_for` keeps waiting until timeout | The sentinel never appeared / wrong regex | Use `snapshot`/`search` first to see existing output, then adjust the regex; a timeout is a normal return, not an error |
 
 ---
 
-## 14. 非目标（明确不做）
+## 14. Non-goals (explicitly out of scope)
 
-- **不做固件下载 / 烧录**：本工具只做"串口数据的中枢与观测"，不解析协议、不刷固件。
-- **不做业务协议解析**：行 = 文本（可含 ANSI），不内置任何设备私有帧格式解析。
-- 不做鉴权体系、多用户、持久化数据库；`token` 只是单令牌门禁。
+- **No firmware download / flashing**: this tool is only "a hub and observer for serial data"; it does not parse protocols or flash firmware.
+- **No business-protocol parsing**: a line = text (may contain ANSI); no device-private frame format parsing is built in.
+- No auth system, multi-user, or persistent database; `token` is only a single-token gate.
 
-> 需要固件 OTA / 协议级能力时，请配合同生态的独立服务（如 OTA 发布服务端）使用。
+> When you need firmware OTA / protocol-level capabilities, pair it with a companion independent service (such as an OTA release server).
 
 ---
 
-## 15. 许可证
+## 15. License
 
-本项目采用 **MIT License**，详见 [LICENSE](LICENSE)。
+This project is under the **MIT License**; see [LICENSE](LICENSE).
 
 ```
 Copyright (c) 2026 cjznb
 ```
 
-内置/依赖的第三方组件及其许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-（内置的 xterm.js 为 MIT；字体为 SIL OFL，运行时由 CDN 加载、未随仓库分发）。
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled/dependency third-party components and their
+licenses (the bundled xterm.js is MIT; fonts are SIL OFL, loaded from a CDN at runtime and not distributed with the repo).
