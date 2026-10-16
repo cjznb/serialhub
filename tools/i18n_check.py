@@ -88,27 +88,33 @@ def _read_brace_block(text: str, start: int) -> tuple[str, int]:
     return text[start:], n
 
 
+def _read_js_string(text: str, i: int) -> tuple[str, int]:
+    """``text[i]`` is a quote; return its raw content and the index after the close."""
+    quote = text[i]
+    i += 1
+    n = len(text)
+    out: list[str] = []
+    while i < n:
+        ch = text[i]
+        if ch == "\\":
+            out.append(text[i : i + 2])
+            i += 2
+            continue
+        if ch == quote:
+            return "".join(out), i + 1
+        out.append(ch)
+        i += 1
+    return "".join(out), n
+
+
 def _top_level_keys(body: str) -> list[str]:
-    """Keys of an object literal: identifiers at brace depth 1 followed by ``:``."""
+    """Keys of an object literal at brace depth 1, quoted or bare, followed by ``:``."""
     keys: list[str] = []
     i = 0
     n = len(body)
     depth = 0
-    in_str: Optional[str] = None
     while i < n:
         ch = body[i]
-        if in_str is not None:
-            if ch == "\\":
-                i += 2
-                continue
-            if ch == in_str:
-                in_str = None
-            i += 1
-            continue
-        if ch in _QUOTES:
-            in_str = ch
-            i += 1
-            continue
         if ch == "{":
             depth += 1
             i += 1
@@ -116,6 +122,19 @@ def _top_level_keys(body: str) -> list[str]:
         if ch == "}":
             depth -= 1
             i += 1
+            continue
+        if ch in _QUOTES:
+            # A quoted string is either a key ("a.b":) or a value ("text"); skip
+            # its body (so braces/commas inside strings don't corrupt the scan)
+            # and record it as a key only when a ':' follows at depth 1.
+            key, j = _read_js_string(body, i)
+            if depth == 1:
+                k = j
+                while k < n and body[k].isspace():
+                    k += 1
+                if k < n and body[k] == ":":
+                    keys.append(key)
+            i = j
             continue
         if depth == 1 and (ch.isalpha() or ch in "_$"):
             j = i
