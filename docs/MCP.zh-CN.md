@@ -116,6 +116,28 @@ python tools/mcp_smoke.py --full --tool-timeout 30
 }
 ```
 
+### DeepSeek Harness（DSH）
+
+DSH 自带 `@deepseek-ai/dsh-mcp-client` 插件，注册只需改配置、无需改源码。把下面这段加进 DSH profile
+的用户 patch 层 `~/.dsh/profiles/<profile>/cordis.patch.yml`：
+
+```yaml
+- insert:
+    - id: serialhub-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: serialhub
+        transport: stdio
+        command: 'E:\Anaconda3\python.exe'
+        args:
+          - 'D:\projects\project\h750\keshe\serialhub\serialhub\mcp_server.py'
+        env:
+          SERIALHUB_URL: 'http://127.0.0.1:8765'
+```
+
+保存 profile patch 后（配置 HMR 热重载），工具会以 `mcp__serialhub__*` 出现在运行中的会话里。定位
+profile、验证步骤、踩坑与撤销的完整过程见 [`DSH.zh-CN.md`](DSH.zh-CN.md)。
+
 ### 环境变量
 
 | 变量 | 默认 | 说明 |

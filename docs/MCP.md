@@ -117,6 +117,29 @@ The equivalent module form (needs `import serialhub` to work, e.g. after `pip in
 }
 ```
 
+### DeepSeek Harness (DSH)
+
+DSH ships the `@deepseek-ai/dsh-mcp-client` plugin, so registering is a config-only step (no source
+changes). Add this to the DSH profile's user patch layer `~/.dsh/profiles/<profile>/cordis.patch.yml`:
+
+```yaml
+- insert:
+    - id: serialhub-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: serialhub
+        transport: stdio
+        command: 'E:\Anaconda3\python.exe'
+        args:
+          - 'D:\projects\project\h750\keshe\serialhub\serialhub\mcp_server.py'
+        env:
+          SERIALHUB_URL: 'http://127.0.0.1:8765'
+```
+
+The tools appear as `mcp__serialhub__*` in the running session after the profile patch is saved (config
+HMR). The full walkthrough — locating the profile, verification, pitfalls and rollback — is in
+[`DSH.md`](DSH.md).
+
 ### Environment variables
 
 | Variable | Default | Notes |

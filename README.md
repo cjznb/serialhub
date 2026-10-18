@@ -15,6 +15,7 @@ Turn one or more serial ports into a **persistent, reviewable, incrementally rea
 
 > The design contract (data model / Hub / REST / CLI / MCP, all frozen) is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 > The MCP-specific guide is in [`docs/MCP.md`](docs/MCP.md) (Chinese: [`docs/MCP.zh-CN.md`](docs/MCP.zh-CN.md)).
+> The DSH (DeepSeek Harness) integration walkthrough is in [`docs/DSH.md`](docs/DSH.md) (Chinese: [`docs/DSH.zh-CN.md`](docs/DSH.zh-CN.md)).
 
 ---
 
@@ -56,7 +57,8 @@ serialhub/
 ├── README.md                 # this file (user manual)
 ├── docs/
 │   ├── ARCHITECTURE.md        # the frozen contract (single source of truth)
-│   └── MCP.md                 # MCP guide (16-tool reference + agent manual)
+│   ├── MCP.md                 # MCP guide (16-tool reference + agent manual)
+│   └── DSH.md                 # DSH (DeepSeek Harness) integration walkthrough
 ├── examples/
 │   ├── config.yaml            # loop:// demo + a commented real port
 │   ├── mcp_client.py          # a runnable programmatic client example
@@ -519,6 +521,26 @@ The equivalent module form: `"command": ["python", "-m", "serialhub", "mcp", "--
   }
 }
 ```
+
+**DSH (DeepSeek Harness)** — `~/.dsh/profiles/<profile>/cordis.patch.yml` (user patch layer):
+
+```yaml
+- insert:
+    - id: serialhub-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: serialhub
+        transport: stdio
+        command: 'E:\Anaconda3\python.exe'
+        args:
+          - 'D:\projects\project\h750\keshe\serialhub\serialhub\mcp_server.py'
+        env:
+          SERIALHUB_URL: 'http://127.0.0.1:8765'
+```
+
+DSH ships the `@deepseek-ai/dsh-mcp-client` plugin, so no source changes are needed: saving the profile
+patch hot-reloads it and the 16 tools appear as `mcp__serialhub__*` in the running session. Full
+walkthrough: [`docs/DSH.md`](docs/DSH.md).
 
 Environment variables: `SERIALHUB_URL` (daemon base, default `http://127.0.0.1:8765`), `SERIALHUB_TOKEN` (when the daemon sets a token).
 

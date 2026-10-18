@@ -15,6 +15,7 @@
 
 > 设计契约（数据模型 / Hub / REST / CLI / MCP，全部冻结）见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 > MCP 专项说明见 [`docs/MCP.zh-CN.md`](docs/MCP.zh-CN.md)。
+> DSH（DeepSeek Harness）接入全过程见 [`docs/DSH.zh-CN.md`](docs/DSH.zh-CN.md)。
 
 ---
 
@@ -55,7 +56,8 @@ serialhub/
 ├── README.md                 # 本文件（用户手册）
 ├── docs/
 │   ├── ARCHITECTURE.md        # 冻结契约（唯一事实来源）
-│   └── MCP.md                 # MCP 使用说明（16 工具参考 + agent 手册）
+│   ├── MCP.md                 # MCP 使用说明（16 工具参考 + agent 手册）
+│   └── DSH.md                 # DSH（DeepSeek Harness）接入全过程
 ├── examples/
 │   ├── config.yaml            # loop:// 演示 + 带注释的真实口
 │   ├── mcp_client.py          # 可运行的编程式客户端示例
@@ -512,6 +514,26 @@ python -m serialhub mcp --transport stdio
   }
 }
 ```
+
+**DSH（DeepSeek Harness）** — `~/.dsh/profiles/<profile>/cordis.patch.yml`（用户 patch 层）：
+
+```yaml
+- insert:
+    - id: serialhub-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: serialhub
+        transport: stdio
+        command: 'E:\Anaconda3\python.exe'
+        args:
+          - 'D:\projects\project\h750\keshe\serialhub\serialhub\mcp_server.py'
+        env:
+          SERIALHUB_URL: 'http://127.0.0.1:8765'
+```
+
+DSH 自带 `@deepseek-ai/dsh-mcp-client` 插件，所以**无需改任何源码**：保存 profile patch 即热重载，
+16 个工具会以 `mcp__serialhub__*` 出现在运行中的会话里。完整接入过程（含踩坑与撤销）见
+[`docs/DSH.zh-CN.md`](docs/DSH.zh-CN.md)。
 
 环境变量：`SERIALHUB_URL`（守护基址，默认 `http://127.0.0.1:8765`）、`SERIALHUB_TOKEN`（守护设了 token 时）。
 
