@@ -95,7 +95,7 @@ serialhub/
 
 | Dependency | Version | Notes |
 |---|---|---|
-| Python | 3.10+ (3.12 verified locally) | runtime and CLI |
+| Python | 3.10+ (3.12 verified) | runtime and CLI |
 | pyserial | >= 3.5 | serial ports |
 | fastapi / uvicorn[standard] | >= 0.110 / >= 0.27 | HTTP + WS |
 | pyyaml | >= 6.0 | config parsing |
@@ -485,7 +485,7 @@ python -m serialhub mcp --transport stdio
 "mcp": {
   "serialhub": {
     "type": "local",
-    "command": ["python", "D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+    "command": ["python", "<path-to-serialhub>/serialhub/mcp_server.py"],
     "enabled": true,
     "environment": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
   }
@@ -501,7 +501,7 @@ The equivalent module form: `"command": ["python", "-m", "serialhub", "mcp", "--
   "mcpServers": {
     "serialhub": {
       "command": "python",
-      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+      "args": ["<path-to-serialhub>/serialhub/mcp_server.py"],
       "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
     }
   }
@@ -515,7 +515,7 @@ The equivalent module form: `"command": ["python", "-m", "serialhub", "mcp", "--
   "mcpServers": {
     "serialhub": {
       "command": "python",
-      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+      "args": ["<path-to-serialhub>/serialhub/mcp_server.py"],
       "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
     }
   }
@@ -531,9 +531,9 @@ The equivalent module form: `"command": ["python", "-m", "serialhub", "mcp", "--
       config:
         serverName: serialhub
         transport: stdio
-        command: 'E:\Anaconda3\python.exe'
+        command: '<python>'
         args:
-          - 'D:\projects\project\h750\keshe\serialhub\serialhub\mcp_server.py'
+          - '<path-to-serialhub>/serialhub/mcp_server.py'
         env:
           SERIALHUB_URL: 'http://127.0.0.1:8765'
 ```
@@ -541,6 +541,8 @@ The equivalent module form: `"command": ["python", "-m", "serialhub", "mcp", "--
 DSH ships the `@deepseek-ai/dsh-mcp-client` plugin, so no source changes are needed: saving the profile
 patch hot-reloads it and the 16 tools appear as `mcp__serialhub__*` in the running session. Full
 walkthrough: [`docs/DSH.md`](docs/DSH.md).
+
+> Replace `<path-to-serialhub>` with this repository's absolute path and `<python>` with the interpreter that has `mcp` installed.
 
 Environment variables: `SERIALHUB_URL` (daemon base, default `http://127.0.0.1:8765`), `SERIALHUB_TOKEN` (when the daemon sets a token).
 

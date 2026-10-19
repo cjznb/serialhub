@@ -10,8 +10,7 @@
 > profile's **user patch layer**. DSH enables config hot-reload (HMR) by default, so the 16 tools
 > appear **immediately after saving** — no restart required.
 >
-> Verified on: 2026-10-18, Windows 11, DSH Desktop 0.2.0-rc.2, Python 3.12.3 (Anaconda), official
-> mcp SDK 1.30.0.
+> Applies to DSH builds that ship the `@deepseek-ai/dsh-mcp-client` plugin (desktop and CLI profiles alike).
 
 ---
 
@@ -31,9 +30,9 @@ dsh-mcp-client (DSH plugin; spawns the child from config, JSON-RPC over stdio)
   ▼
 serialhub/mcp_server.py (16 tools; each forwards to one HTTP call)
   ▼
-serialhub serve (persistent daemon, 127.0.0.1:8765, holds the COM ports + ring buffers)
+serialhub serve (persistent daemon, default 127.0.0.1:8765, holds the ports + ring buffers)
   ▼
-COMx / loop://
+COMx / /dev/ttyUSB0 / loop:// / ...
 ```
 
 Two preconditions (both pre-existing serialhub design, not introduced by the integration):
@@ -45,12 +44,16 @@ Two preconditions (both pre-existing serialhub design, not introduced by the int
 
 ## 2. Prerequisites
 
-| Item | Requirement | Verified locally |
-|---|---|---|
-| Python | 3.10+ with `mcp>=1.9` and `pyserial` installed | `E:\Anaconda3\python.exe`, 3.12.3, mcp 1.30.0, pyserial 3.5 |
-| serialhub | this repository's source (the script fixes `sys.path`, no install needed) | `D:\projects\project\h750\keshe\serialhub` |
-| daemon | `serialhub serve` running | `127.0.0.1:8765` (had been up ~1.75 days) |
-| DSH | ships `@deepseek-ai/dsh-mcp-client` | DSH Desktop 0.2.0-rc.2 (bundled) |
+| Item | Requirement |
+|---|---|
+| Python | 3.10+ with `mcp>=1.9` (MCP server dependency) and `pyserial` installed; the integration config points at this interpreter |
+| serialhub | this repository's source; `mcp_server.py` runs directly as a script (it fixes `sys.path`, so `pip install -e .` is not needed) |
+| daemon | `serialhub serve` running; the MCP server reaches it through `SERIALHUB_URL` (default `http://127.0.0.1:8765`) |
+| DSH | ships the `@deepseek-ai/dsh-mcp-client` plugin |
+
+> Below, `<path-to-serialhub>` is the absolute path of this repository root, `<profile>` is the DSH
+> profile to wire up, and `<python>` is the interpreter that has `mcp` installed (its absolute path is
+> recommended).
 
 ---
 
@@ -68,18 +71,18 @@ run ends with `# RESULT: PASS`. This step does **not** need the daemon.
 ### 3.2 Locate the DSH config file to edit
 
 - DSH home defaults to `~/.dsh` (`DSH_HOME`); the profile directory is `$DSH_HOME/profiles/<profile>/`;
-- The desktop build uses the profile named `desktop` (the process env shows `DSH_PROFILE=desktop` and
-  `DSH_PROFILE_DIR=...\profiles\desktop`);
 - Edit the **user patch layer** `cordis.patch.yml`; the sibling `cordis.yml` is just an empty entry
   list — **do not edit it**;
 - A wider-scoped alternative is the home-level `$DSH_HOME/cordis.patch.yml`. This guide uses the
-  profile level.
+  profile level;
+- The profile name is visible in `$env:DSH_PROFILE`: the desktop build uses `desktop`, and a CLI
+  `dsh <profile>` launch uses that same name.
 
 ### 3.3 Back up
 
 ```powershell
-Copy-Item "$env:DSH_HOME\profiles\desktop\cordis.patch.yml" `
-          "$env:DSH_HOME\profiles\desktop\cordis.patch.yml.bak-$(Get-Date -Format yyyyMMdd)"
+Copy-Item "$env:DSH_HOME\profiles\<profile>\cordis.patch.yml" `
+          "$env:DSH_HOME\profiles\<profile>\cordis.patch.yml.bak-$(Get-Date -Format yyyyMMdd)"
 ```
 
 ### 3.4 Append one `insert` entry
@@ -96,22 +99,22 @@ Append to `cordis.patch.yml` (`insert` is the loader's “insert list” patch s
       config:
         serverName: serialhub
         transport: stdio
-        command: 'E:\Anaconda3\python.exe'          # absolute path of the interpreter that has mcp
+        command: '<python>'                                   # interpreter that has mcp (absolute path is safer)
         args:
-          - 'D:\projects\project\h750\keshe\serialhub\serialhub\mcp_server.py'
+          - '<path-to-serialhub>/serialhub/mcp_server.py'     # replace with the real absolute path
         env:
           SERIALHUB_URL: 'http://127.0.0.1:8765'
 ```
 
-See [§4](#4-config-fields-dsh-mcp-client) for the field meanings. Note: if the same file contains
-blocks that another tool **owns and rewrites** (e.g. an agentchat adapter's managed block written by
-`install.mjs`), put the new entry **outside** such blocks, otherwise it can be overwritten.
+Replace `<python>` / `<path-to-serialhub>` with real values. See
+[§4](#4-config-fields-dsh-mcp-client) for the field meanings. Note: if the same file contains blocks
+that another tool **owns and rewrites** (e.g. a managed block written by an adapter installer), put the
+new entry **outside** such blocks, otherwise it can be overwritten.
 
 ### 3.5 Apply
 
 - DSH's composed tree enables `dsh-hmr` by default; it watches the profile manifest, the profile patch
-  and the home patch, so **saving hot-reloads — no restart**. In the measured run the current session's
-  tool list went from 0 to 16 `mcp__serialhub__*` tools right after the save.
+  and the home patch, so **saving hot-reloads — no restart**.
 - If HMR is disabled in a deployment, the change applies after restarting DSH.
 - A failed first connection is **not fatal**: `failOnStartupError` defaults to `false`, so DSH still
   starts — just without these tools — and logs the error. Fix the daemon/path and save the config once
@@ -125,8 +128,8 @@ blocks that another tool **owns and rewrites** (e.g. an agentchat adapter's mana
 |---|---|---|
 | `serverName` | `serialhub` | Tool namespace; `[A-Za-z0-9_-]{1,32}`, unique in a registration scope. Determines the public tool names `mcp__serialhub__<tool>` |
 | `transport` | `stdio` | local stdio child process |
-| `command` | absolute python interpreter path | child executable |
-| `args` | absolute `mcp_server.py` path | script form (it fixes `sys.path` itself, so `pip install -e .` is not needed) |
+| `command` | `<python>` | child executable (the interpreter that has `mcp`) |
+| `args` | `<path-to-serialhub>/serialhub/mcp_server.py` | script form (it fixes `sys.path` itself, so `pip install -e .` is not needed) |
 | `env` | `SERIALHUB_URL` | merged over the **scrubbed** parent env; see [§6.5](#65-dsh-scrubs-the-child-environment) |
 | `cwd` | unset | child working directory; not needed for the script form |
 | `toolCallTimeoutMs` | default 60000 | per `tools/call` timeout; keep `wait_for`/`send(wait_regex)` `timeout_ms` below it |
@@ -145,38 +148,30 @@ simpler.
 2. **DSH loading layer**: after saving, a new session (or the hot-reloaded current session) lists 16
    `mcp__serialhub__*` tools; the MCP resource server list also shows `serialhub` (this server exposes
    no resources — `resources: []` is normal).
-3. **Business layer**: actually call a serial tool. Excerpts from the measured run:
+3. **Business layer**: actually call a serial tool (`<port>` is a port name from your own config,
+   `<N>` is the `next_seq` you last read):
 
 ```text
-mcp__serialhub__list_ports()
-  → ok: true
-    system: COM11 (CH343) / COM15 (CH340) / several Bluetooth serial ports
-    ports:  c6   → COM11  open:true  rx_lines:415   buffer 415 lines
-            stm32→ COM15  open:true  rx_lines:4581  buffer 7549 lines
-
-mcp__serialhub__status()
-  → server: {host: 127.0.0.1, port: 8765, version: 0.1.0, uptime_ms: 151210141}
-
-mcp__serialhub__read(port="stm32", since_seq=8213)
-  → immediately returns four new lines 8214..8217 (no double consumption)
-
-mcp__serialhub__wait_for(port="stm32", regex="I/SENS", since_seq=8217)
-  → matched:true, line.seq=8242
+list_ports()                            → {"ok": true, "system": [...], "ports": [...]}
+status()                                → {"ok": true, "server": {...}, "ports": [...]}
+read(port="<port>", since_seq=<N>)      → {"ok": true, "lines": [...], "next_seq": ...}
+wait_for(port="<port>", regex="<regex>", since_seq=<N>, timeout_ms=8000)
+                                        → {"ok": true, "matched": true, "line": {...}, "seq": ...}
 ```
 
 ---
 
-## 6. Pitfalls (all observed in practice)
+## 6. Pitfalls
 
 ### 6.1 `wait_for` without `since_seq` can match an **old** buffered line
 
-`wait_for` is designed to “scan the ring buffer first”, so without `since_seq` it may return a stale
-line from boot immediately (the measured run matched `seq=2`). **To wait for a *new* line, pass the
+`wait_for` is designed to “scan the ring buffer first”, so without `since_seq` it returns immediately
+if a matching line is already buffered — possibly a stale one. **To wait for a *new* line, pass the
 `next_seq` you last read**:
 
 ```text
-wait_for(port="stm32", regex="I/SENS", since_seq=8217, timeout_ms=8000)
-  → matched:true, line.seq=8242   ← a new line
+wait_for(port="<port>", regex="<regex>", since_seq=<last next_seq>, timeout_ms=8000)
+  → {"ok": true, "matched": true, "line": {...}, "seq": ...}   ← a new line
 ```
 
 ### 6.2 Daemon not running → tools return `ok:false`
@@ -205,8 +200,8 @@ survive). Therefore:
 
 ### 6.6 Do not hand-edit managed blocks
 
-If `cordis.patch.yml` contains a managed block maintained by another tool (e.g. an agentchat adapter's
-`install.mjs`), it will be rewritten; keep the serialhub entry outside such blocks.
+If `cordis.patch.yml` contains a managed block maintained by another tool, it will be rewritten; keep
+the serialhub entry outside such blocks.
 
 ### 6.7 Tool names are stable
 
@@ -239,24 +234,16 @@ naming is uniformly `mcp__<serverName>__<tool>`.
 
 ---
 
-## 9. Porting log (this machine)
+## 9. Integration checklist
 
-Date: 2026-10-18 (Windows 11, DSH Desktop 0.2.0-rc.2, Anaconda Python 3.12.3).
-
-1. Read `serialhub/mcp_server.py` and `serialhub/mcp_compat.py`; confirmed stdio and mcp 1.x/2.x
-   compatibility; confirmed the local Anaconda has `mcp 1.30.0`, `pyserial 3.5`, `fastapi`, `uvicorn`,
-   `pyyaml`, `websockets`.
-2. `python tools/mcp_smoke.py` → 16 tools / `PASS`.
-3. Located DSH: `DSH_HOME=~/.dsh`, `DSH_PROFILE=desktop` → edited
-   `~/.dsh/profiles/desktop/cordis.patch.yml`; backed it up first.
-4. Appended the `insert` entry ([§3.4](#34-append-one-insert-entry), `command` =
-   `E:\Anaconda3\python.exe`, `env.SERIALHUB_URL=http://127.0.0.1:8765`).
-5. HMR reloaded immediately on save: the current session showed 16 `mcp__serialhub__*` tools with
-   **no restart**.
-6. Business verification: `list_ports` / `status` returned real daemon data; `read(since_seq=...)`
-   resumed without duplicates; `wait_for(since_seq=...)` caught a new log line.
-7. **No source file of serialhub or DSH was modified**; the only changes were one user config entry
-   in the DSH profile plus a backup file.
+- [ ] `python tools/mcp_smoke.py` passes; `tools/list` returns 16 tools
+- [ ] the daemon is running and `SERIALHUB_URL` points at it
+- [ ] the profile patch is saved; HMR took effect (or DSH was restarted)
+- [ ] the session lists 16 `mcp__serialhub__*` tools
+- [ ] `list_ports` returns `ok:true` and shows the configured ports
+- [ ] `read(port, since_seq=...)` resumes at new lines without duplicate consumption
+- [ ] `wait_for(port, regex, since_seq=...)` catches a **new** line
+- [ ] rollback drill: removing the entry removes the tools; the daemon and serial service are unaffected
 
 ---
 

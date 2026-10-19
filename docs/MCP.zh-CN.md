@@ -78,7 +78,7 @@ python tools/mcp_smoke.py --full --tool-timeout 30
 "mcp": {
   "serialhub": {
     "type": "local",
-    "command": ["python", "D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+    "command": ["python", "<path-to-serialhub>/serialhub/mcp_server.py"],
     "enabled": true,
     "environment": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
   }
@@ -95,7 +95,7 @@ python tools/mcp_smoke.py --full --tool-timeout 30
   "mcpServers": {
     "serialhub": {
       "command": "python",
-      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+      "args": ["<path-to-serialhub>/serialhub/mcp_server.py"],
       "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
     }
   }
@@ -109,7 +109,7 @@ python tools/mcp_smoke.py --full --tool-timeout 30
   "mcpServers": {
     "serialhub": {
       "command": "python",
-      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+      "args": ["<path-to-serialhub>/serialhub/mcp_server.py"],
       "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
     }
   }
@@ -128,15 +128,17 @@ DSH 自带 `@deepseek-ai/dsh-mcp-client` 插件，注册只需改配置、无需
       config:
         serverName: serialhub
         transport: stdio
-        command: 'E:\Anaconda3\python.exe'
+        command: '<python>'
         args:
-          - 'D:\projects\project\h750\keshe\serialhub\serialhub\mcp_server.py'
+          - '<path-to-serialhub>/serialhub/mcp_server.py'
         env:
           SERIALHUB_URL: 'http://127.0.0.1:8765'
 ```
 
 保存 profile patch 后（配置 HMR 热重载），工具会以 `mcp__serialhub__*` 出现在运行中的会话里。定位
 profile、验证步骤、踩坑与撤销的完整过程见 [`DSH.zh-CN.md`](DSH.zh-CN.md)。
+
+> 把 `<path-to-serialhub>` 换成本仓库的绝对路径、`<python>` 换成已安装 `mcp` 的解释器。
 
 ### 环境变量
 

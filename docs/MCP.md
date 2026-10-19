@@ -79,7 +79,7 @@ proves the `initialize` / `tools/list` / `tools/call` contract is correct.
 "mcp": {
   "serialhub": {
     "type": "local",
-    "command": ["python", "D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+    "command": ["python", "<path-to-serialhub>/serialhub/mcp_server.py"],
     "enabled": true,
     "environment": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
   }
@@ -96,7 +96,7 @@ The equivalent module form (needs `import serialhub` to work, e.g. after `pip in
   "mcpServers": {
     "serialhub": {
       "command": "python",
-      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+      "args": ["<path-to-serialhub>/serialhub/mcp_server.py"],
       "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
     }
   }
@@ -110,7 +110,7 @@ The equivalent module form (needs `import serialhub` to work, e.g. after `pip in
   "mcpServers": {
     "serialhub": {
       "command": "python",
-      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+      "args": ["<path-to-serialhub>/serialhub/mcp_server.py"],
       "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
     }
   }
@@ -129,9 +129,9 @@ changes). Add this to the DSH profile's user patch layer `~/.dsh/profiles/<profi
       config:
         serverName: serialhub
         transport: stdio
-        command: 'E:\Anaconda3\python.exe'
+        command: '<python>'
         args:
-          - 'D:\projects\project\h750\keshe\serialhub\serialhub\mcp_server.py'
+          - '<path-to-serialhub>/serialhub/mcp_server.py'
         env:
           SERIALHUB_URL: 'http://127.0.0.1:8765'
 ```
@@ -139,6 +139,8 @@ changes). Add this to the DSH profile's user patch layer `~/.dsh/profiles/<profi
 The tools appear as `mcp__serialhub__*` in the running session after the profile patch is saved (config
 HMR). The full walkthrough — locating the profile, verification, pitfalls and rollback — is in
 [`DSH.md`](DSH.md).
+
+> Replace `<path-to-serialhub>` with this repository's absolute path and `<python>` with the interpreter that has `mcp` installed.
 
 ### Environment variables
 

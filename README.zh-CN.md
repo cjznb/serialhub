@@ -94,7 +94,7 @@ serialhub/
 
 | 依赖 | 版本 | 说明 |
 |---|---|---|
-| Python | 3.10+（本机实测 3.12） | 运行时与 CLI |
+| Python | 3.10+（3.12 已验证） | 运行时与 CLI |
 | pyserial | >= 3.5 | 串口 |
 | fastapi / uvicorn[standard] | >= 0.110 / >= 0.27 | HTTP + WS |
 | pyyaml | >= 6.0 | 配置解析 |
@@ -478,7 +478,7 @@ python -m serialhub mcp --transport stdio
 "mcp": {
   "serialhub": {
     "type": "local",
-    "command": ["python", "D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+    "command": ["python", "<path-to-serialhub>/serialhub/mcp_server.py"],
     "enabled": true,
     "environment": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
   }
@@ -494,7 +494,7 @@ python -m serialhub mcp --transport stdio
   "mcpServers": {
     "serialhub": {
       "command": "python",
-      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+      "args": ["<path-to-serialhub>/serialhub/mcp_server.py"],
       "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
     }
   }
@@ -508,7 +508,7 @@ python -m serialhub mcp --transport stdio
   "mcpServers": {
     "serialhub": {
       "command": "python",
-      "args": ["D:\\projects\\project\\h750\\keshe\\serialhub\\serialhub\\mcp_server.py"],
+      "args": ["<path-to-serialhub>/serialhub/mcp_server.py"],
       "env": { "SERIALHUB_URL": "http://127.0.0.1:8765" }
     }
   }
@@ -524,9 +524,9 @@ python -m serialhub mcp --transport stdio
       config:
         serverName: serialhub
         transport: stdio
-        command: 'E:\Anaconda3\python.exe'
+        command: '<python>'
         args:
-          - 'D:\projects\project\h750\keshe\serialhub\serialhub\mcp_server.py'
+          - '<path-to-serialhub>/serialhub/mcp_server.py'
         env:
           SERIALHUB_URL: 'http://127.0.0.1:8765'
 ```
@@ -534,6 +534,8 @@ python -m serialhub mcp --transport stdio
 DSH 自带 `@deepseek-ai/dsh-mcp-client` 插件，所以**无需改任何源码**：保存 profile patch 即热重载，
 16 个工具会以 `mcp__serialhub__*` 出现在运行中的会话里。完整接入过程（含踩坑与撤销）见
 [`docs/DSH.zh-CN.md`](docs/DSH.zh-CN.md)。
+
+> 把 `<path-to-serialhub>` 换成本仓库的绝对路径、`<python>` 换成已安装 `mcp` 的解释器。
 
 环境变量：`SERIALHUB_URL`（守护基址，默认 `http://127.0.0.1:8765`）、`SERIALHUB_TOKEN`（守护设了 token 时）。
 
